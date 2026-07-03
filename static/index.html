@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skin Arbitraj Paneli</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+</head>
+<body>
+
+<!-- sulu boya kenar filtresi -->
+<svg width="0" height="0" style="position:absolute">
+  <filter id="watercolor">
+    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.016" numOctaves="3" seed="7" result="noise"/>
+    <feDisplacementMap in="SourceGraphic" in2="noise" scale="46"/>
+  </filter>
+</svg>
+
+<nav class="navbar">
+  <span class="logo brush">Skin Arbitraj</span>
+  <span class="spacer"></span>
+  <div class="nav-status" id="navStatus">yükleniyor…</div>
+  <button class="btn btn-ghost" onclick="openHistory()">🕘 Geçmiş Aramalar</button>
+  <button class="btn btn-telegram" onclick="openModal('telegramModal')">✈️ Telegram</button>
+  <button class="btn btn-settings" onclick="openSettings()">⚙️ Ayarlar</button>
+  <button class="btn btn-primary" id="refreshBtn" onclick="refreshNow()">↻ Şimdi Tara</button>
+</nav>
+
+<div class="container">
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="game-tabs">
+        <button class="game-tab active" id="tabGameCs2" onclick="switchGame('cs2')">🔫 CS2</button>
+        <button class="game-tab" id="tabGameRust" onclick="switchGame('rust')">🛠 Rust</button>
+        <button class="game-tab" id="tabGameKo" onclick="switchGame('ko')">⚔️ KO</button>
+      </div>
+      <button class="side-tab active" id="tabSearch" onclick="switchView('search')">🔍 Arama</button>
+      <button class="side-tab" id="tabOpps" onclick="switchView('opps')">💎 Fırsatlar</button>
+    </aside>
+
+    <div class="main-col">
+      <div id="viewSearch">
+        <div class="hero" id="heroSearch">
+          <h1 id="heroTitle">Fırsatları renklendir.</h1>
+          <p id="heroDesc">CS2 itemlarını dokuz pazarda aynı anda izle — Skinport, DMarket, Bitskins, Kopazar,
+            GameSatis, ByNoGame, CSFloat, İtemSatış ve Itemci.
+             Fiyat eşiğin tutunca ya da siteler arası makas açılınca Telegram'dan haber alırsın.</p>
+        </div>
+
+        <div class="add-card">
+          <h2 class="brush">Ürün Ara</h2>
+          <div class="add-row">
+            <input type="text" id="itemInput" class="search-input" placeholder="örn. AK-47 | Vulcan veya Soul Taker AK47"
+                   onkeydown="if(event.key==='Enter')searchItem()">
+            <button class="btn btn-primary" id="searchBtn" onclick="searchItem()">🔍 Ara</button>
+          </div>
+          <div class="hint" id="searchHint">Wear yazmana gerek yok: <code>AK-47 | Elite Build</code> yaz, varyantlar bulunur ve hangisini istediğin sorulur. <code>StatTrak™</code> ve <code>★</code> desteklenir.</div>
+        </div>
+
+        <div class="items-grid" id="itemsGrid"></div>
+      </div>
+
+      <div id="viewOpps" style="display:none">
+        <div class="hero">
+          <h1>Fırsatlar.</h1>
+          <p>Takip ettiğin ürünlerde siteler arası fiyat makasları ve Skinport kataloğundaki
+             indirimli itemlar — ucuzdan al, pahalıya sat.</p>
+        </div>
+
+        <div class="add-card">
+          <div class="opps-controls">
+            <label>Min. makas %
+              <input type="number" id="oppMinSpread" value="5" min="0" step="1">
+            </label>
+            <label>Min. indirim %
+              <input type="number" id="oppMinDiscount" value="15" min="0" step="1">
+            </label>
+            <button class="btn btn-primary btn-sm" id="oppRefreshBtn" onclick="loadOpportunities()">↻ Yenile</button>
+          </div>
+        </div>
+
+        <h2 class="brush opps-title">⚖️ Siteler Arası Makas</h2>
+        <div id="oppSpreads" class="opps-list"></div>
+
+        <h2 class="brush opps-title" id="oppDiscountTitle">📉 Skinport İndirim Radarı</h2>
+        <div class="hint" id="oppDiscountHint" style="margin:-6px 0 12px">Referans fiyatın altında satılan itemlar (tüm katalog taranır).</div>
+        <div id="oppDiscounts" class="opps-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Varyant seçim modalı -->
+<div class="modal-backdrop" id="variantModal">
+  <div class="modal">
+    <button class="close-x" onclick="closeModal('variantModal')">✕</button>
+    <h2 class="brush">Hangi model?</h2>
+    <p class="hint" id="variantHint"></p>
+    <div class="variant-list" id="variantList"></div>
+  </div>
+</div>
+
+<!-- Geçmiş aramalar modalı -->
+<div class="modal-backdrop" id="historyModal">
+  <div class="modal modal-wide">
+    <button class="close-x" onclick="closeModal('historyModal')">✕</button>
+    <h2 class="brush">Geçmiş Aramalar</h2>
+    <div class="history-list" id="historyList"></div>
+  </div>
+</div>
+
+<!-- Telegram modal -->
+<div class="modal-backdrop" id="telegramModal">
+  <div class="modal">
+    <button class="close-x" onclick="closeModal('telegramModal')">✕</button>
+    <h2 class="brush">Telegram Ayarları</h2>
+    <label>Bot Token</label>
+    <input id="tgToken" type="password" placeholder="123456:ABC-DEF…" autocomplete="off">
+    <label>Chat ID</label>
+    <input id="tgChat" placeholder="örn. 123456789">
+    <div class="hint" style="margin-top:10px">
+      Bot oluşturmak için Telegram'da <b>@BotFather</b>'a <code>/newbot</code> yaz.
+      Chat ID'ni öğrenmek için <b>@userinfobot</b>'a mesaj at. Sonra kendi botuna bir kez <code>/start</code> yazmayı unutma.
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="testTelegram()">Test Mesajı</button>
+      <button class="btn btn-primary" onclick="saveTelegram()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<!-- Ayarlar modal -->
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal">
+    <button class="close-x" onclick="closeModal('settingsModal')">✕</button>
+    <h2 class="brush">Ayarlar</h2>
+    <label>Kontrol aralığı (dakika)</label>
+    <input id="setInterval" type="number" min="1" value="5">
+    <label>Bitskins API anahtarı (isteğe bağlı)</label>
+    <input id="setBitskins" type="password" placeholder="bitskins.com → hesap ayarları" autocomplete="off">
+    <label>Aktif kaynaklar</label>
+    <div class="checks" id="sourceChecks"></div>
+    <div class="modal-actions">
+      <button class="btn btn-primary" onclick="saveSettings()">Kaydet</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
