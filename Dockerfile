@@ -8,6 +8,7 @@ COPY app ./app
 COPY static ./static
 
 ENV PANEL_DB=/srv/data/panel.db
+RUN mkdir -p /srv/data
 VOLUME /srv/data
 EXPOSE 8000
 

@@ -12,7 +12,7 @@ from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup
 
-from ..itemname import ParsedItem, detect_listing_wear, norm, norm_listing
+from ..itemname import ParsedItem, listing_contains_skin, norm, norm_listing
 from ..ko_item import ParsedKoItem, ko_listing_matches, norm_ko
 from .base import PriceResult, USER_AGENT
 
@@ -92,7 +92,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
                 continue
             market = _market_name(block, link_text)
             has_st = "stattrak" in market.lower() or "stattrak" in link_text.lower()
-            if norm_listing(market) != target:
+            if norm_listing(market) != target and not listing_contains_skin(market + " " + link_text, parsed):
                 continue
             if parsed.stattrak != has_st:
                 continue

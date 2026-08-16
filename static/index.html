@@ -5,93 +5,161 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Skin Arbitraj Paneli</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎨</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
 </head>
-<body>
+<body class="shell">
 
-<!-- sulu boya kenar filtresi -->
-<svg width="0" height="0" style="position:absolute">
-  <filter id="watercolor">
-    <feTurbulence type="fractalNoise" baseFrequency="0.012 0.016" numOctaves="3" seed="7" result="noise"/>
-    <feDisplacementMap in="SourceGraphic" in2="noise" scale="46"/>
-  </filter>
-</svg>
+<button type="button" class="sidebar-notch" onclick="toggleSidebar()" aria-label="Menü">
+  <span class="sidebar-notch-bars"></span>
+</button>
+<div class="sidebar-backdrop" onclick="closeSidebar()"></div>
 
-<nav class="navbar">
-  <span class="logo brush">Skin Arbitraj</span>
-  <span class="spacer"></span>
-  <div class="nav-status" id="navStatus">yükleniyor…</div>
-  <button class="btn btn-ghost" onclick="openHistory()">🕘 Geçmiş Aramalar</button>
-  <button class="btn btn-telegram" onclick="openModal('telegramModal')">✈️ Telegram</button>
-  <button class="btn btn-settings" onclick="openSettings()">⚙️ Ayarlar</button>
-  <button class="btn btn-primary" id="refreshBtn" onclick="refreshNow()">↻ Şimdi Tara</button>
-</nav>
-
-<div class="container">
-  <div class="layout">
-    <aside class="sidebar">
-      <div class="game-tabs">
-        <button class="game-tab active" id="tabGameCs2" onclick="switchGame('cs2')">🔫 CS2</button>
-        <button class="game-tab" id="tabGameRust" onclick="switchGame('rust')">🛠 Rust</button>
-        <button class="game-tab" id="tabGameKo" onclick="switchGame('ko')">⚔️ KO</button>
-      </div>
-      <button class="side-tab active" id="tabSearch" onclick="switchView('search')">🔍 Arama</button>
-      <button class="side-tab" id="tabOpps" onclick="switchView('opps')">💎 Fırsatlar</button>
-    </aside>
-
-    <div class="main-col">
-      <div id="viewSearch">
-        <div class="hero" id="heroSearch">
-          <h1 id="heroTitle">Fırsatları renklendir.</h1>
-          <p id="heroDesc">CS2 itemlarını dokuz pazarda aynı anda izle — Skinport, DMarket, Bitskins, Kopazar,
-            GameSatis, ByNoGame, CSFloat, İtemSatış ve Itemci.
-             Fiyat eşiğin tutunca ya da siteler arası makas açılınca Telegram'dan haber alırsın.</p>
-        </div>
-
-        <div class="add-card">
-          <h2 class="brush">Ürün Ara</h2>
-          <div class="add-row">
-            <input type="text" id="itemInput" class="search-input" placeholder="örn. AK-47 | Vulcan veya Soul Taker AK47"
-                   onkeydown="if(event.key==='Enter')searchItem()">
-            <button class="btn btn-primary" id="searchBtn" onclick="searchItem()">🔍 Ara</button>
-          </div>
-          <div class="hint" id="searchHint">Wear yazmana gerek yok: <code>AK-47 | Elite Build</code> yaz, varyantlar bulunur ve hangisini istediğin sorulur. <code>StatTrak™</code> ve <code>★</code> desteklenir.</div>
-        </div>
-
-        <div class="items-grid" id="itemsGrid"></div>
-      </div>
-
-      <div id="viewOpps" style="display:none">
-        <div class="hero">
-          <h1>Fırsatlar.</h1>
-          <p>Takip ettiğin ürünlerde siteler arası fiyat makasları ve Skinport kataloğundaki
-             indirimli itemlar — ucuzdan al, pahalıya sat.</p>
-        </div>
-
-        <div class="add-card">
-          <div class="opps-controls">
-            <label>Min. makas %
-              <input type="number" id="oppMinSpread" value="5" min="0" step="1">
-            </label>
-            <label>Min. indirim %
-              <input type="number" id="oppMinDiscount" value="15" min="0" step="1">
-            </label>
-            <button class="btn btn-primary btn-sm" id="oppRefreshBtn" onclick="loadOpportunities()">↻ Yenile</button>
-          </div>
-        </div>
-
-        <h2 class="brush opps-title">⚖️ Siteler Arası Makas</h2>
-        <div id="oppSpreads" class="opps-list"></div>
-
-        <h2 class="brush opps-title" id="oppDiscountTitle">📉 Skinport İndirim Radarı</h2>
-        <div class="hint" id="oppDiscountHint" style="margin:-6px 0 12px">Referans fiyatın altında satılan itemlar (tüm katalog taranır).</div>
-        <div id="oppDiscounts" class="opps-list"></div>
-      </div>
+<aside class="app-sidebar">
+  <div class="brand">
+    <div class="brand-mark">S</div>
+    <div>
+      <div class="brand-name">Skin Arbitraj</div>
+      <div class="brand-sub">fiyat paneli</div>
     </div>
   </div>
-</div>
+  <nav class="snav">
+    <button class="sitem on" id="navAra" onclick="goSection('ara')">
+      <span class="sic">⌕</span> Item Ara
+    </button>
+    <button class="sitem" id="navListele" onclick="goSection('listele')">
+      <span class="sic">☰</span> Item Listele
+    </button>
+    <button class="sitem" id="navDepo" onclick="goSection('depo')">
+      <span class="sic">★</span> Takip
+    </button>
+    <button class="sitem" id="navOpps" onclick="goSection('opps')">
+      <span class="sic">◆</span> Fırsatlar
+    </button>
+  </nav>
+  <div class="side-foot">
+    <div class="nav-status" id="navStatus">yükleniyor…</div>
+    <button class="sitem" onclick="openHistory()">🕘 Geçmiş</button>
+    <button class="sitem" onclick="openModal('telegramModal')">✈️ Telegram</button>
+    <button class="sitem" onclick="openSettings()">⚙ Ayarlar</button>
+    <button class="sitem" id="refreshBtn" onclick="refreshNow()">↻ Şimdi Tara</button>
+  </div>
+</aside>
 
-<!-- Varyant seçim modalı -->
+<main class="app-main">
+  <div id="viewHub" class="as-workspace">
+    <div class="as-hub-header">
+      <h1 id="hubTitle">Item Ara</h1>
+      <p class="hub-lead" id="hubLead">Oyunu seç, ardından aramaya geç.</p>
+    </div>
+    <div class="as-hub-grid">
+      <button class="hub-tile" onclick="pickGame('cs2')">
+        <div class="hub-tile-img-wrap tile-cs2">
+          <div class="hub-glyph">CS2</div>
+        </div>
+        <div class="hub-tile-title">CS2</div>
+      </button>
+      <button class="hub-tile" onclick="pickGame('rust')">
+        <div class="hub-tile-img-wrap tile-rust">
+          <div class="hub-glyph">RUST</div>
+        </div>
+        <div class="hub-tile-title">Rust</div>
+      </button>
+      <button class="hub-tile" onclick="pickGame('ko')">
+        <div class="hub-tile-img-wrap tile-ko">
+          <div class="hub-glyph">KO</div>
+        </div>
+        <div class="hub-tile-title">Knight Online</div>
+      </button>
+    </div>
+  </div>
+
+  <div id="viewSearch" style="display:none">
+    <button class="as-back-btn" onclick="goSection(currentSection)">← Oyunlar</button>
+    <div class="hero" id="heroSearch">
+      <h1 id="heroTitle">Fırsatları renklendir.</h1>
+      <p id="heroDesc"></p>
+    </div>
+    <div class="add-card">
+      <h2 class="brush">Ürün Ara</h2>
+      <div class="add-row">
+        <input type="text" id="itemInput" class="search-input" placeholder="örn. AK-47 | Vulcan"
+               onkeydown="if(event.key==='Enter')searchItem()">
+        <button class="btn btn-primary" id="searchBtn" onclick="searchItem()">🔍 Ara</button>
+      </div>
+      <div class="hint" id="searchHint"></div>
+    </div>
+    <div class="items-grid" id="itemsGrid"></div>
+  </div>
+
+  <div id="viewCatalog" style="display:none">
+    <button class="as-back-btn" onclick="goSection('listele')">← Oyunlar</button>
+    <div class="add-card">
+      <h2 class="brush">Item listesi</h2>
+      <div class="add-row">
+        <input type="text" id="catalogQ" class="search-input" placeholder="isim ara…"
+               onkeydown="if(event.key==='Enter')loadCatalog(0)">
+        <button class="btn btn-primary" onclick="loadCatalog(0)">Filtrele</button>
+      </div>
+      <div class="hint" id="catalogNote">Sıra Steam fiyat artışına göre: 48 saat ve 1 günde yükselenler (özellikle ikisinde de artan, farkı büyük olan) en üstte. 1 günde düşüp 48 saatte artan, veya 48 saatte düşüp 1 günde artan da üste alınır. İkisinde de düşenler en sonda.</div>
+      <div class="hint" id="catalogMeta"></div>
+    </div>
+    <div id="catalogList" class="name-list"></div>
+    <div class="pager" id="catalogPager"></div>
+  </div>
+
+  <div id="viewChart" style="display:none">
+    <button class="as-back-btn" id="chartBack" onclick="backFromChart()">← Liste</button>
+    <div class="chart-head">
+      <h2 id="chartName"></h2>
+      <div class="chart-now" id="chartNow">—</div>
+      <button class="btn btn-primary btn-sm" id="depoToggle" onclick="toggleDepoFromChart()">Takibe ekle</button>
+    </div>
+    <div class="chart-spans">
+      <button class="span-btn on" data-span="1h" onclick="setChartSpan('1h')">Saatlik</button>
+      <button class="span-btn" data-span="1d" onclick="setChartSpan('1d')">Günlük</button>
+      <button class="span-btn" data-span="1w" onclick="setChartSpan('1w')">Haftalık</button>
+      <button class="span-btn" data-span="1m" onclick="setChartSpan('1m')">Aylık</button>
+    </div>
+    <p class="chart-stats" id="chartStats"></p>
+    <div class="chart-box">
+      <canvas id="priceChart"></canvas>
+      <p class="chart-empty" id="chartEmpty" style="display:none">Geçmiş fiyat çekilemedi. Biraz sonra tekrar dene.</p>
+    </div>
+  </div>
+
+  <div id="viewDepo" style="display:none">
+    <button class="as-back-btn" onclick="goSection('depo')">← Oyunlar</button>
+    <div class="add-card">
+      <h2 class="brush">Takip</h2>
+      <p class="hint">Beğendiğin ürünler burada. Grafikten veya aramadan “Takibe ekle” ile gelir. İsme basınca grafik açılır.</p>
+    </div>
+    <div id="depoList" class="name-list"></div>
+  </div>
+
+  <div id="viewOpps" style="display:none">
+    <div class="hero">
+      <h1>Fırsatlar.</h1>
+      <p>Takip ettiğin ürünlerde siteler arası fiyat makasları ve Skinport indirimleri.</p>
+    </div>
+    <div class="add-card">
+      <div class="opps-controls">
+        <label>Min. makas %
+          <input type="number" id="oppMinSpread" value="5" min="0" step="1">
+        </label>
+        <label>Min. indirim %
+          <input type="number" id="oppMinDiscount" value="15" min="0" step="1">
+        </label>
+        <button class="btn btn-primary btn-sm" id="oppRefreshBtn" onclick="loadOpportunities()">↻ Yenile</button>
+      </div>
+    </div>
+    <h2 class="brush opps-title">⚖️ Siteler Arası Makas</h2>
+    <div id="oppSpreads" class="opps-list"></div>
+    <h2 class="brush opps-title" id="oppDiscountTitle">📉 Skinport İndirim Radarı</h2>
+    <div class="hint" id="oppDiscountHint" style="margin:-6px 0 12px">Referans fiyatın altında satılan itemlar.</div>
+    <div id="oppDiscounts" class="opps-list"></div>
+  </div>
+</main>
+
 <div class="modal-backdrop" id="variantModal">
   <div class="modal">
     <button class="close-x" onclick="closeModal('variantModal')">✕</button>
@@ -101,7 +169,6 @@
   </div>
 </div>
 
-<!-- Geçmiş aramalar modalı -->
 <div class="modal-backdrop" id="historyModal">
   <div class="modal modal-wide">
     <button class="close-x" onclick="closeModal('historyModal')">✕</button>
@@ -110,7 +177,6 @@
   </div>
 </div>
 
-<!-- Telegram modal -->
 <div class="modal-backdrop" id="telegramModal">
   <div class="modal">
     <button class="close-x" onclick="closeModal('telegramModal')">✕</button>
@@ -121,7 +187,7 @@
     <input id="tgChat" placeholder="örn. 123456789">
     <div class="hint" style="margin-top:10px">
       Bot oluşturmak için Telegram'da <b>@BotFather</b>'a <code>/newbot</code> yaz.
-      Chat ID'ni öğrenmek için <b>@userinfobot</b>'a mesaj at. Sonra kendi botuna bir kez <code>/start</code> yazmayı unutma.
+      Chat ID için <b>@userinfobot</b>. Kendi botuna bir kez <code>/start</code> yaz.
     </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" onclick="testTelegram()">Test Mesajı</button>
@@ -130,7 +196,6 @@
   </div>
 </div>
 
-<!-- Ayarlar modal -->
 <div class="modal-backdrop" id="settingsModal">
   <div class="modal">
     <button class="close-x" onclick="closeModal('settingsModal')">✕</button>
@@ -148,7 +213,7 @@
 </div>
 
 <div id="toast"></div>
-
-<script src="/static/app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
+<script src="/static/app.js" defer></script>
 </body>
 </html>

@@ -37,12 +37,23 @@ RUST_SOURCES = {
         "fetch": bynogame.fetch_rust,
     },
     "waxpeer": {"label": "Waxpeer", "module": waxpeer, "currency": "USD"},
-    "steam": {"label": "Steam Market", "module": steam_market, "currency": "USD"},
+    "steam": {
+        "label": "Steam Market",
+        "module": steam_market,
+        "currency": "TRY",
+        "fetch": steam_market.fetch_rust,
+    },
     "bitskins": {
         "label": "Bitskins",
         "module": bitskins,
         "currency": "USD",
         "fetch": bitskins.fetch_rust,
+    },
+    "gamesatis": {
+        "label": "GameSatis",
+        "module": gamesatis,
+        "currency": "TRY",
+        "fetch": gamesatis.fetch_rust,
     },
 }
 

@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ..itemname import ParsedItem
+from ..itemname import ParsedItem, listing_matches_parsed
 from ..ko_item import bng_name_matches
 from .base import PriceResult, USER_AGENT
 API = "https://gw.bynogame.com/steam-products/v2/products"
@@ -57,16 +57,31 @@ async def _fetch(
             return res
 
         items = body.get("data", {}).get("result", [])
-        match = next((it for it in items if it.get("marketHashName") == parsed.full_name), None)
-        if not match:
+        matches = [
+            it for it in items
+            if listing_matches_parsed(it.get("marketHashName") or "", parsed)
+        ]
+        if not matches:
             res.error = "ilan bulunamadı"
             return res
 
-        qty = match.get("listingCount") or 0
-        price = match.get("priceMin")
-        if qty <= 0 or not price or float(price) <= 0:
+        def _price(it):
+            qty = it.get("listingCount") or 0
+            price = it.get("priceMin")
+            if qty <= 0 or not price:
+                return None
+            try:
+                val = float(price)
+            except (TypeError, ValueError):
+                return None
+            return val if val > 0 else None
+
+        priced = [(it, _price(it)) for it in matches]
+        priced = [(it, p) for it, p in priced if p is not None]
+        if not priced:
             res.error = "satışta yok"
             return res
+        match, price = min(priced, key=lambda x: x[1])
 
         slug = match.get("slug", "")
         lid = match.get("cheapestListingId")
@@ -162,3 +177,47 @@ async def fetch_ko(client: httpx.AsyncClient, parsed) -> PriceResult:
         res.error = f"{type(e).__name__}: {e}"[:200]
         res.url = search_url
     return res
+
+
+async def list_steam_catalog(
+    client: httpx.AsyncClient,
+    *,
+    app_id: int,
+    page: int = 1,
+    limit: int = 80,
+    q: str = "",
+) -> dict:
+    """Sayfalı ByNoGame katalog — Skinport limitinde anlık liste için."""
+    filters = f"AppId:{app_id}"
+    if q.strip():
+        filters += f";Name:{quote(q.strip(), safe='')}"
+    url = (
+        f"{API}?page={max(1, page)}&limit={min(max(1, limit), 100)}"
+        f"&sort=MostSelling:-1&filters={filters}"
+    )
+    r = await client.get(url, headers=_HEADERS, timeout=20)
+    r.raise_for_status()
+    body = r.json()
+    data = body.get("data") or {}
+    rows = data.get("result") or []
+    total = int(data.get("totalCount") or data.get("total") or len(rows))
+    items = []
+    for it in rows:
+        name = it.get("marketHashName") or it.get("displayName") or ""
+        if not name:
+            continue
+        price = it.get("priceMin") or it.get("price")
+        try:
+            price_try = float(price) if price else None
+        except (TypeError, ValueError):
+            price_try = None
+        slug = it.get("slug") or ""
+        path = "rust-skin" if app_id == 252490 else "cs2-skin"
+        url_item = f"{BASE}/tr/oyunlar/{path}/{slug}" if slug else None
+        items.append({
+            "name": name,
+            "price_try": price_try,
+            "url": url_item,
+            "quantity": it.get("listingCount") or 0,
+        })
+    return {"items": items, "total": total}

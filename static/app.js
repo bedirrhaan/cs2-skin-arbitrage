@@ -10,7 +10,7 @@ let currentItemId = parseInt(localStorage.getItem("currentItemId_" + currentGame
 const GAME_UI = {
   cs2: {
     title: "Fırsatları renklendir.",
-    desc: "CS2 itemlarını dokuz pazarda aynı anda izle — Skinport, DMarket, Bitskins, Kopazar, GameSatis, ByNoGame, CSFloat, İtemSatış ve Itemci. Fiyat eşiğin tutunca ya da siteler arası makas açılınca Telegram'dan haber alırsın.",
+    desc: "CS2 fiyatını Steam Market referans alır, yanına Skinport, DMarket, CSFloat, Kopazar, GameSatis, ByNoGame, İtemSatış ve Itemci koyar. Steam'den ucuzsa fırsat; eşiğin tutunca Telegram gelir.",
     placeholder: "örn. AK-47 | Vulcan veya P250 | Visions",
     hint: "Wear yazmana gerek yok: <code>AK-47 | Elite Build</code> yaz, varyantlar bulunur. <code>StatTrak™</code> ve <code>★</code> desteklenir.",
     empty: "Henüz arama yapılmadı. Yukarıdan bir CS2 skin ara,<br>fiyatları pazarlarda aynı anda gör.",
@@ -18,10 +18,10 @@ const GAME_UI = {
   },
   rust: {
     title: "Rust skinlerini izle.",
-    desc: "Rust itemlarını Skinport, DMarket, rust.tm, ByNoGame, Waxpeer ve Steam Market üzerinde karşılaştır. USD fiyatlar otomatik TRY'ye çevrilir.",
+    desc: "Rust itemlarını Skinport, DMarket, rust.tm, ByNoGame, Waxpeer, Steam Market ve GameSatis üzerinde karşılaştır. USD fiyatlar otomatik TRY'ye çevrilir.",
     placeholder: "örn. Soul Taker AK47 veya Big Grin",
     hint: "Steam market adını yaz. Rust skinlerinde genelde wear yok; tam ad bulunursa doğrudan eklenir.",
-    empty: "Henüz Rust araması yok. Yukarıdan bir skin ara,<br>altı pazarda fiyatları gör.",
+    empty: "Henüz Rust araması yok. Yukarıdan bir skin ara,<br>pazarlarda fiyatları gör.",
     settingsKey: "enabled_sources_rust",
   },
   ko: {
@@ -76,34 +76,364 @@ async function loadItems() {
   const data = await api(`/api/items?game=${currentGame}`);
   SOURCES = data.sources;
   ITEMS = data.items;
+  try {
+    const d = await api(`/api/depo?game=${currentGame}`);
+    TAKIP_NAMES = new Set((d.items || []).map((x) => x.name));
+  } catch {}
   renderCurrent();
   if (document.getElementById("historyModal").classList.contains("open")) renderHistory();
 }
 
-function applyGameUi() {
-  const ui = GAME_UI[currentGame] || GAME_UI.cs2;
-  document.getElementById("heroTitle").textContent = ui.title;
-  document.getElementById("heroDesc").textContent = ui.desc;
-  document.getElementById("itemInput").placeholder = ui.placeholder;
-  document.getElementById("searchHint").innerHTML = ui.hint;
-  document.getElementById("tabGameCs2").classList.toggle("active", currentGame === "cs2");
-  document.getElementById("tabGameRust").classList.toggle("active", currentGame === "rust");
-  document.getElementById("tabGameKo").classList.toggle("active", currentGame === "ko");
-  const hideDiscounts = currentGame === "rust" || currentGame === "ko";
-  document.getElementById("oppDiscountTitle").style.display = hideDiscounts ? "none" : "";
-  document.getElementById("oppDiscountHint").style.display = hideDiscounts ? "none" : "";
-  document.getElementById("oppDiscounts").style.display = hideDiscounts ? "none" : "";
-  if (document.getElementById("settingsModal").classList.contains("open")) renderSourceChecks();
+let currentSection = "ara";
+let catalogOffset = 0;
+let chartName = "";
+let chartSpan = "1h";
+let chartFrom = "listele";
+let priceChart = null;
+let chartInDepo = false;
+let TAKIP_NAMES = new Set();
+
+const HUB_COPY = {
+  ara: { title: "Item Ara", lead: "Oyunu seç. CS2, Rust veya Knight Online aramasına geçersin." },
+  listele: { title: "Item Listele", lead: "Oyunu seç. Tüm isimler listelenir; birine basınca fiyat grafiği açılır." },
+  depo: { title: "Takip", lead: "Oyunu seç. Beğenip takibe aldığın itemler burada." },
+};
+
+function toggleSidebar() {
+  document.body.classList.toggle("sidebar-open");
+}
+function closeSidebar() {
+  document.body.classList.remove("sidebar-open");
 }
 
-function switchGame(game) {
-  if (game === currentGame) return;
+function hideViews() {
+  ["viewHub", "viewSearch", "viewCatalog", "viewChart", "viewDepo", "viewOpps"].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el) el.style.display = "none";
+  });
+}
+
+function setNav() {
+  document.getElementById("navAra").classList.toggle("on", currentSection === "ara");
+  document.getElementById("navListele").classList.toggle("on", currentSection === "listele");
+  document.getElementById("navDepo").classList.toggle("on", currentSection === "depo");
+  document.getElementById("navOpps").classList.toggle("on", currentSection === "opps");
+}
+
+function goSection(sec) {
+  currentSection = sec;
+  setNav();
+  closeSidebar();
+  hideViews();
+  if (sec === "opps") {
+    document.getElementById("viewOpps").style.display = "";
+    loadOpportunities();
+    return;
+  }
+  const copy = HUB_COPY[sec] || HUB_COPY.ara;
+  document.getElementById("hubTitle").textContent = copy.title;
+  document.getElementById("hubLead").textContent = copy.lead;
+  document.getElementById("viewHub").style.display = "";
+}
+
+async function pickGame(game) {
+  closeSidebar();
   currentGame = game;
   localStorage.setItem("currentGame", game);
   currentItemId = parseInt(localStorage.getItem("currentItemId_" + game) || "", 10) || null;
   applyGameUi();
-  loadItems();
-  if (document.getElementById("viewOpps").style.display !== "none") loadOpportunities();
+  hideViews();
+  if (currentSection === "ara") {
+    document.getElementById("viewSearch").style.display = "";
+    await loadItems();
+  } else if (currentSection === "listele") {
+    document.getElementById("viewCatalog").style.display = "";
+    await loadCatalog(0);
+  } else if (currentSection === "depo") {
+    document.getElementById("viewDepo").style.display = "";
+    await loadDepo();
+  }
+}
+
+function applyGameUi() {
+  const ui = GAME_UI[currentGame] || GAME_UI.cs2;
+  const ht = document.getElementById("heroTitle");
+  const hd = document.getElementById("heroDesc");
+  if (ht) ht.textContent = ui.title;
+  if (hd) hd.textContent = ui.desc;
+  const inp = document.getElementById("itemInput");
+  const hint = document.getElementById("searchHint");
+  if (inp) inp.placeholder = ui.placeholder;
+  if (hint) hint.innerHTML = ui.hint;
+  const hideDiscounts = currentGame === "rust" || currentGame === "ko";
+  const t = document.getElementById("oppDiscountTitle");
+  const h = document.getElementById("oppDiscountHint");
+  const d = document.getElementById("oppDiscounts");
+  if (t) t.style.display = hideDiscounts ? "none" : "";
+  if (h) h.style.display = hideDiscounts ? "none" : "";
+  if (d) d.style.display = hideDiscounts ? "none" : "";
+  if (document.getElementById("settingsModal").classList.contains("open")) renderSourceChecks();
+}
+
+async function loadCatalog(offset) {
+  catalogOffset = offset || 0;
+  const q = (document.getElementById("catalogQ").value || "").trim();
+  const box = document.getElementById("catalogList");
+  box.innerHTML = `<div class="empty"><p>yükleniyor…</p></div>`;
+  try {
+    const d = await api(`/api/catalog?game=${currentGame}&q=${encodeURIComponent(q)}&offset=${catalogOffset}&limit=80`);
+    document.getElementById("catalogMeta").textContent =
+      `${(d.total || 0).toLocaleString("tr-TR")} kayıt — ${currentGame.toUpperCase()}`
+      + (d.ranked ? ` · ${d.ranked.toLocaleString("tr-TR")} Steam trendi sıralı` : "")
+      + (d.ranking ? " · sıralama hesaplanıyor…" : "")
+      + (d.syncing ? " · katalog doluyor…" : "");
+    const fmtChg = (v, label) => {
+      if (v == null || v === "") return `<span class="mu">${label} —</span>`;
+      const n = Number(v);
+      const sign = n > 0 ? "+" : "";
+      const cls = n > 0 ? "up" : n < 0 ? "dn" : "mu";
+      return `<span class="${cls}">${label} ${sign}${n.toFixed(1)}%</span>`;
+    };
+    if (!d.items.length) {
+      box.innerHTML = `<div class="empty"><p>${esc(d.hint || d.error || "Sonuç yok.")}</p></div>`;
+    } else {
+      box.innerHTML = d.items.map((it) => `
+        <div class="name-row" data-name="${esc(it.name)}" onclick="openChart(this.dataset.name)">
+          <span class="nm">${esc(it.name)}</span>
+          <span class="chg">${fmtChg(it.chg_48h, "48s")}<br>${fmtChg(it.chg_24h, "1g")}</span>
+          <span class="pr">${it.price_try != null ? fmtTL(it.price_try) : "—"}</span>
+          <button class="star" title="takibe ekle" onclick="event.stopPropagation(); addDepoName(this.parentElement.dataset.name)">☆</button>
+        </div>`).join("");
+    }
+    const pager = document.getElementById("catalogPager");
+    const prev = catalogOffset > 0;
+    const next = catalogOffset + d.limit < d.total;
+    pager.innerHTML =
+      (prev ? `<button class="btn btn-ghost" onclick="loadCatalog(${Math.max(0, catalogOffset - 80)})">← önceki</button>` : "") +
+      (next ? `<button class="btn btn-ghost" onclick="loadCatalog(${catalogOffset + 80})">sonraki →</button>` : "");
+    if ((d.syncing || d.ranking) && catalogOffset === 0) {
+      clearTimeout(window._catPoll);
+      window._catPoll = setTimeout(() => loadCatalog(0), d.ranking ? 7000 : 4000);
+    }
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function loadDepo() {
+  const box = document.getElementById("depoList");
+  try {
+    const d = await api(`/api/depo?game=${currentGame}`);
+    TAKIP_NAMES = new Set((d.items || []).map((x) => x.name));
+    if (!d.items.length) {
+      box.innerHTML = `<div class="empty"><p>Bu oyunda takipte ürün yok. Grafikten veya aramadan “Takibe ekle”.</p></div>`;
+      return;
+    }
+    box.innerHTML = d.items.map((it) => `
+      <div class="name-row" data-name="${esc(it.name)}" data-id="${it.id}" onclick="openChart(this.dataset.name, 'depo')">
+        <span class="nm">${esc(it.name)}</span>
+        <button class="star" onclick="event.stopPropagation(); removeDepo(${it.id})">✕</button>
+      </div>`).join("");
+  } catch (e) {
+    box.innerHTML = `<div class="empty"><p>${esc(e.message)}</p></div>`;
+  }
+}
+
+async function goTakipList() {
+  currentSection = "depo";
+  setNav();
+  closeSidebar();
+  hideViews();
+  document.getElementById("viewDepo").style.display = "";
+  await loadDepo();
+}
+
+async function addDepoName(name, goList = false) {
+  try {
+    if (TAKIP_NAMES.has(name)) {
+      if (goList) await goTakipList();
+      return;
+    }
+    await api("/api/depo", { method: "POST", body: JSON.stringify({ game: currentGame, name }) });
+    TAKIP_NAMES.add(name);
+    toast("Takibe eklendi", "ok");
+    chartInDepo = chartName === name ? true : chartInDepo;
+    syncDepoBtn();
+    if (typeof currentItemId === "number") renderCurrent();
+    if (goList) await goTakipList();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function removeDepo(id) {
+  await api(`/api/depo/${id}`, { method: "DELETE" });
+  loadDepo();
+}
+
+function syncDepoBtn() {
+  const b = document.getElementById("depoToggle");
+  if (!b) return;
+  b.textContent = chartInDepo ? "Takiptesin" : "Takibe ekle";
+}
+
+function backFromChart() {
+  hideViews();
+  if (chartFrom === "depo") {
+    document.getElementById("viewDepo").style.display = "";
+    loadDepo();
+  } else {
+    document.getElementById("viewCatalog").style.display = "";
+  }
+}
+
+async function openChart(name, from) {
+  chartName = name;
+  chartFrom = from || "listele";
+  chartSpan = "1h";
+  hideViews();
+  document.getElementById("viewChart").style.display = "";
+  document.getElementById("chartName").textContent = name;
+  document.querySelectorAll(".span-btn").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
+  await renderChart();
+}
+
+function setChartSpan(span) {
+  chartSpan = span;
+  document.querySelectorAll(".span-btn").forEach((b) => b.classList.toggle("on", b.dataset.span === span));
+  renderChart();
+}
+
+function fmtChartLabel(t, span) {
+  const d = new Date(t);
+  if (Number.isNaN(d.getTime())) return t;
+  if (span === "1h") {
+    return d.toLocaleString("tr-TR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+  }
+  if (span === "1w") {
+    return d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" });
+  }
+  if (span === "1m") {
+    return d.toLocaleDateString("tr-TR", { month: "short", year: "numeric" });
+  }
+  return d.toLocaleDateString("tr-TR", { day: "2-digit", month: "short" });
+}
+
+async function renderChart() {
+  const empty = document.getElementById("chartEmpty");
+  const stats = document.getElementById("chartStats");
+  try {
+    empty.textContent = "geçmiş yükleniyor…";
+    empty.style.display = "";
+    const d = await api(`/api/catalog/history?game=${currentGame}&name=${encodeURIComponent(chartName)}&span=${chartSpan}`);
+    chartInDepo = !!d.in_depo;
+    syncDepoBtn();
+    document.getElementById("chartNow").textContent = d.latest != null ? fmtTL(d.latest) : "—";
+    const pts = d.points || [];
+    if (stats) {
+      if (pts.length >= 2 && d.first != null && d.latest != null) {
+        const sign = (d.change_pct || 0) >= 0 ? "+" : "";
+        stats.textContent = `${fmtChartLabel(d.from_t, chartSpan)} ${fmtTL(d.first)}  →  ${fmtChartLabel(d.to_t, chartSpan)} ${fmtTL(d.latest)}  (${sign}${d.change_pct}%)`;
+      } else {
+        stats.textContent = pts.length ? "Tek kayıt var — Steam geçmişi henüz gelmedi." : "";
+      }
+    }
+    if (!pts.length) {
+      empty.style.display = "";
+      empty.textContent = "Bu item için Steam fiyat geçmişi bulunamadı.";
+      if (priceChart) { priceChart.destroy(); priceChart = null; }
+      return;
+    }
+    empty.style.display = "none";
+    const ctx = document.getElementById("priceChart");
+    if (priceChart) priceChart.destroy();
+    let series = pts.map((p) => p.v);
+    let labels = pts.map((p) => fmtChartLabel(p.t, chartSpan));
+    if (series.length === 1) {
+      series = [series[0], series[0]];
+      labels = [labels[0], "şimdi"];
+    }
+    const low = d.low;
+    const up = (d.change_pct || 0) >= 0;
+    priceChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Steam fiyat",
+            data: series,
+            borderColor: up ? "#a2d12d" : "#e85d5d",
+            backgroundColor: up ? "rgba(162,209,45,.12)" : "rgba(232,93,93,.12)",
+            fill: true,
+            stepped: false,
+            tension: 0.15,
+            pointRadius: series.length < 50 ? 3 : 0,
+            pointHoverRadius: 5,
+            borderWidth: 2,
+            spanGaps: true,
+          },
+          ...(low != null ? [{
+            label: "Dönem düşük",
+            data: series.map(() => low),
+            borderColor: "#3a86ff",
+            borderDash: [6, 4],
+            pointRadius: 0,
+            borderWidth: 1.5,
+            fill: false,
+          }] : []),
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { labels: { color: "#c8d0dc" } },
+          tooltip: {
+            callbacks: {
+              label(ctx) {
+                if (ctx.parsed.y == null) return ctx.dataset.label;
+                return `${ctx.dataset.label}: ${fmtTL(ctx.parsed.y)}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: "#8b93a7",
+              maxTicksLimit: ({ "1h": 12, "1d": 8, "1w": 8, "1m": 6 }[chartSpan] || 10),
+              maxRotation: 0,
+            },
+            grid: { color: "rgba(255,255,255,.06)" },
+          },
+          y: {
+            beginAtZero: false,
+            ticks: {
+              color: "#8b93a7",
+              callback(v) {
+                const d = Math.max(...series) < 30 ? 2 : 0;
+                return Number(v).toLocaleString("tr-TR", { maximumFractionDigits: d }) + " ₺";
+              },
+            },
+            grid: { color: "rgba(255,255,255,.06)" },
+          },
+        },
+      },
+    });
+    ctx.parentElement.style.height = "360px";
+  } catch (e) {
+    empty.style.display = "";
+    empty.textContent = e.message;
+    if (stats) stats.textContent = "";
+  }
+}
+
+async function toggleDepoFromChart() {
+  if (chartInDepo) {
+    await goTakipList();
+    return;
+  }
+  await addDepoName(chartName, true);
 }
 
 function renderCurrent() {
@@ -131,10 +461,11 @@ function enabledSourcesList() {
 
 function renderItem(it) {
   const enabled = enabledSourcesList();
+  const scanning = currentItemId === it.id && window._priceScan;
   const cells = enabled.filter((s) => SOURCES[s]).map((src) => {
     const p = it.prices[src];
     const label = SOURCES[src];
-    if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">henüz veri yok</div></div>`;
+    if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${scanning ? "taranıyor…" : "henüz veri yok"}</div></div>`;
     if (p.error || p.price_try == null)
       return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${esc(p.error || "veri yok")}</div></div>`;
     const cls = it.spread
@@ -168,6 +499,7 @@ function renderItem(it) {
       <span class="item-name">${esc(it.name)}</span>
       ${spread}
       <span class="spacer"></span>
+      <button class="btn btn-primary btn-sm" onclick="followSearchItem(${it.id})">${TAKIP_NAMES.has(it.name) ? "Takiptesin" : "Takibe ekle"}</button>
       <button class="btn btn-ghost btn-sm" onclick="toggleAlertForm(${it.id})">+ alarm</button>
       <button class="btn btn-danger btn-sm" onclick="deleteItem(${it.id}, '${esc(it.name).replace(/'/g, "\\'")}')">sil</button>
     </div>
@@ -184,6 +516,12 @@ function renderItem(it) {
       <button class="btn btn-primary btn-sm" onclick="addAlert(${it.id})">kaydet</button>
     </div>
   </div>`;
+}
+
+function followSearchItem(id) {
+  const it = ITEMS.find((x) => x.id === id);
+  if (!it) return;
+  return addDepoName(it.name, true);
 }
 
 function esc(s) {
@@ -242,15 +580,22 @@ async function pickVariant(i) {
 async function refreshItem(itemId, silent) {
   const btn = document.getElementById("refreshBtn");
   if (btn) btn.disabled = true;
+  window._priceScan = true;
+  const poll = setInterval(() => { loadItems().catch(() => {}); }, 1200);
   try {
-    await api(`/api/items/${itemId}/refresh`, { method: "POST" });
+    const r = await api(`/api/items/${itemId}/refresh`, { method: "POST" });
+    if (r && r.ok === false) throw new Error(r.msg || "tarama atlandı");
     if (!silent) toast("Fiyatlar güncellendi 🎨", "ok");
     await loadItems();
     loadStatus();
   } catch (e) {
-    if (!silent) toast(e.message, "err");
+    toast(e.message, "err");
+  } finally {
+    clearInterval(poll);
+    window._priceScan = false;
+    if (btn) btn.disabled = false;
+    await loadItems().catch(() => {});
   }
-  if (btn) btn.disabled = false;
 }
 
 async function selectItem(name) {
@@ -286,12 +631,7 @@ async function deleteItem(id, name) {
 
 /* ---------- sekmeler ---------- */
 function switchView(v) {
-  const search = v === "search";
-  document.getElementById("viewSearch").style.display = search ? "" : "none";
-  document.getElementById("viewOpps").style.display = search ? "none" : "";
-  document.getElementById("tabSearch").classList.toggle("active", search);
-  document.getElementById("tabOpps").classList.toggle("active", !search);
-  if (!search) loadOpportunities();
+  goSection(v === "search" ? "ara" : "opps");
 }
 
 /* ---------- fırsatlar ---------- */
@@ -402,6 +742,10 @@ function renderHistory() {
 function showFromHistory(id) {
   currentItemId = id;
   localStorage.setItem("currentItemId_" + currentGame, id);
+  currentSection = "ara";
+  setNav();
+  hideViews();
+  document.getElementById("viewSearch").style.display = "";
   renderCurrent();
   closeModal("historyModal");
 }
@@ -536,12 +880,18 @@ async function loadStatus() {
   } catch {}
 }
 
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeSidebar();
+});
+
 /* ---------- başlangıç ---------- */
 (async function init() {
   applyGameUi();
+  goSection("ara");
   await loadSettings();
-  await loadItems();
   await loadStatus();
-  setInterval(loadItems, 60000);
+  setInterval(() => {
+    if (document.getElementById("viewSearch").style.display !== "none") loadItems();
+  }, 60000);
   setInterval(loadStatus, 20000);
 })();

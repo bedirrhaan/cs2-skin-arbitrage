@@ -11,7 +11,7 @@ import time
 import httpx
 
 from .. import catalog_cache as cache
-from ..itemname import ParsedItem
+from ..itemname import ParsedItem, pick_catalog_row
 from .base import PriceResult
 
 CS2_APP_ID = 730
@@ -65,7 +65,7 @@ async def _get_items(
                 "https://api.skinport.com/v1/items",
                 params={"app_id": app_id, "currency": currency},
                 headers={"Accept-Encoding": "br"},
-                timeout=60,
+                timeout=20,
             )
             if r.status_code == 429:
                 raise SkinportRateLimited()
@@ -88,7 +88,7 @@ async def _fetch(
     res = PriceResult(source="skinport", currency="TRY")
     try:
         items = await _get_items(client, app_id=app_id)
-        it = items.get(parsed.full_name)
+        name, it = pick_catalog_row(items, parsed)
         if not it:
             res.error = "item bulunamadı"
             return res
@@ -99,6 +99,8 @@ async def _fetch(
             res.error = "satışta yok"
             return res
         res.price = min_price
+        if name and name != parsed.full_name:
+            res.url = it.get("item_page")
     except (httpx.HTTPStatusError, SkinportRateLimited):
         res.error = "Skinport istek limiti — birkaç dakika sonra tekrar dene"
     except Exception as e:

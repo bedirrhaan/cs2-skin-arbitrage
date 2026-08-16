@@ -40,11 +40,14 @@ Open **http://127.0.0.1:8090**
 
 ### Docker
 
+Panel ve Redis aynı Compose ağında çalışır (`REDIS_URL=redis://redis:6379/0`).
+
 ```bash
+cp .env.example .env   # isteğe bağlı: TELEGRAM_TOKEN / TELEGRAM_CHAT_ID
 docker compose up -d --build
 ```
 
-Served on port 8000; data persists in the `panel-data` volume.
+Panel **http://127.0.0.1:8000** (veya sunucu IP). Veri `panel-data`, önbellek `redis-data` volume'unda kalır.
 
 ## Usage
 

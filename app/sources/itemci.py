@@ -11,7 +11,7 @@ from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup
 
-from ..itemname import ParsedItem, WEAR_TR, norm, norm_listing
+from ..itemname import ParsedItem, WEAR_TR, listing_contains_skin, norm, norm_listing
 from .base import PriceResult, USER_AGENT
 
 BASE = "https://itemci.com"
@@ -63,7 +63,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
                 continue
             raw_name = name_el.get_text(" ", strip=True)
             has_st = "stattrak" in raw_name.lower()
-            if norm_listing(raw_name) != target:
+            if norm_listing(raw_name) != target and not listing_contains_skin(raw_name, parsed):
                 continue
             if parsed.stattrak != has_st:
                 continue

@@ -11,7 +11,7 @@ from urllib.parse import quote
 
 import httpx
 from bs4 import BeautifulSoup
-from ..itemname import ParsedItem, norm, norm_listing
+from ..itemname import ParsedItem, listing_contains_skin, norm, norm_listing
 from ..ko_item import ParsedKoItem, ko_listing_matches
 from .base import PriceResult, USER_AGENT
 
@@ -173,7 +173,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
             full = name_el.get_text(" ", strip=True)
             if sub_el:
                 full += " " + sub_el.get_text(" ", strip=True)
-            if norm_listing(full) != target:
+            if norm_listing(full) != target and not listing_contains_skin(full, parsed):
                 continue
 
             # kartın tamamı bir <a> içinde; wear rozeti ve fiyat kardeş bloklarda

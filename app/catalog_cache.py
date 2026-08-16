@@ -92,14 +92,32 @@ async def _connect_redis() -> None:
         return
     try:
         import redis.asyncio as aioredis
-
-        client = aioredis.from_url(url, decode_responses=True)
-        await client.ping()
-        _redis = client
-        _backend = "redis"
     except Exception:
         _redis = None
         _backend = "memory"
+        return
+
+    last_err: Exception | None = None
+    for attempt in range(8):
+        client = None
+        try:
+            client = aioredis.from_url(url, decode_responses=True)
+            await client.ping()
+            _redis = client
+            _backend = "redis"
+            return
+        except Exception as e:
+            last_err = e
+            if client is not None:
+                try:
+                    await client.aclose()
+                except Exception:
+                    pass
+            await asyncio.sleep(min(1 + attempt, 5))
+    _redis = None
+    _backend = "memory"
+    if last_err:
+        print(f"Redis bağlanamadı, bellek önbelleğine düşülüyor: {last_err}")
 
 
 async def get(key: str) -> CatalogEntry | None:

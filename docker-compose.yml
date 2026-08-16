@@ -1,11 +1,32 @@
 services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   panel:
     build: .
     ports:
-      - "8000:8000"
+      - "${PANEL_PORT:-8000}:8000"
+    environment:
+      PANEL_DB: /srv/data/panel.db
+      REDIS_URL: redis://redis:6379/0
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     volumes:
       - panel-data:/srv/data
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   panel-data:
+  redis-data:

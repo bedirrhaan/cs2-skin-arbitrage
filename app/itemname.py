@@ -64,7 +64,7 @@ def parse_item_name(name: str) -> ParsedItem:
     s = s.lstrip("★").strip()
 
     stattrak = bool(re.match(r"(?i)^stattrak", s))
-    s = re.sub(r"(?i)^stattrak[™™]?\s*", "", s)
+    s = re.sub(r"(?i)^stattrak[\u2122\ufe0f]?\s*", "", s)
 
     souvenir = bool(re.match(r"(?i)^souvenir\s", s))
     s = re.sub(r"(?i)^souvenir\s+", "", s)
@@ -138,3 +138,85 @@ def norm_listing(s: str) -> str:
     s = _WEAR_PAREN.sub(" ", s)
     s = re.sub(r"\s+-\s+[^|]+$", "", s)
     return norm(s)
+
+
+_NO_WEAR = re.compile(
+    r"(?i)^(sticker|patch|charm|graffiti|music kit|souvenir package)\b"
+)
+
+
+def compose_full_name(parsed: ParsedItem, wear: str | None = None) -> str:
+    """Steam market_hash_name üret (StatTrak / ★ / wear dahil)."""
+    wear = parsed.wear if wear is None else wear
+    extra = "StatTrak™ " if parsed.stattrak else ("Souvenir " if parsed.souvenir else "")
+    prefix = "★ " if parsed.knife else ""
+    name = f"{prefix}{extra}{parsed.base_name}".strip()
+    name = re.sub(r"\s+", " ", name)
+    if wear:
+        name = f"{name} ({wear})"
+    return name
+
+
+def needs_wear_variants(parsed: ParsedItem) -> bool:
+    if parsed.wear:
+        return False
+    if _NO_WEAR.search(parsed.base_name):
+        return False
+    return "|" in parsed.base_name
+
+
+def cs2_wear_variants(parsed: ParsedItem) -> list[str]:
+    """Wear yazılmamış silah skinlerinde 5 aşınma varyantı üret."""
+    if parsed.wear:
+        return [compose_full_name(parsed, parsed.wear)]
+    if not needs_wear_variants(parsed):
+        return []
+    return [compose_full_name(parsed, wear) for wear in WEARS]
+
+
+def listing_contains_skin(text: str, parsed: ParsedItem) -> bool:
+    """Türk ilan başlığında silah + desen geçiyor mu (tam Steam adı olmayabilir)."""
+    ntext = norm_listing(text)
+    parts = [norm(p) for p in re.split(r"\s*\|\s*", parsed.base_name) if p.strip()]
+    if len(parts) < 2:
+        return bool(parts) and parts[0] in ntext
+    return all(p in ntext for p in parts)
+
+
+def listing_matches_parsed(name: str, parsed: ParsedItem) -> bool:
+    """Katalog/ilan adının aranan itemle aynı skin olup olmadığı."""
+    p = parse_item_name(name)
+    if norm(p.base_name) != norm(parsed.base_name):
+        return False
+    if p.stattrak != parsed.stattrak:
+        return False
+    if p.souvenir != parsed.souvenir:
+        return False
+    if parsed.wear and p.wear and parsed.wear != p.wear:
+        return False
+    return True
+
+
+def pick_catalog_row(items: dict, parsed: ParsedItem, price_key: str = "min_price"):
+    """Tam ada bak; yoksa aynı skin+StatTrak içinde en ucuz satırı seç."""
+    exact = items.get(parsed.full_name)
+    if exact:
+        return parsed.full_name, exact
+    best_name, best_row, best_price = None, None, None
+    for name, row in items.items():
+        if not listing_matches_parsed(name, parsed):
+            continue
+        qty = row.get("quantity")
+        if qty is not None and int(qty or 0) <= 0:
+            continue
+        p = row.get(price_key)
+        if p is None:
+            continue
+        try:
+            val = float(p)
+        except (TypeError, ValueError):
+            continue
+        if best_price is None or val < best_price:
+            best_price = val
+            best_name, best_row = name, row
+    return best_name, best_row

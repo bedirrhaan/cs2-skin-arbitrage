@@ -8,11 +8,13 @@ import httpx
 from . import fx, telegram
 from .db import enabled_sources_for, get_conn, get_settings
 from .games import GAMES
-from .itemname import norm, parse_item_name
+from .itemname import cs2_wear_variants, norm, parse_item_name
 from .sources import skinport
 from .sources.skinport import CS2_APP_ID, RUST_APP_ID
 
 status: dict = {"last_run": None, "running": False, "errors": {}, "next_run": None}
+
+SOURCE_TIMEOUT = 16.0
 
 
 def source_labels(game: str = "cs2") -> dict:
@@ -29,15 +31,9 @@ def _source_fetch(src: dict, key: str, client, parsed, settings: dict):
     return fn(client, parsed)
 
 
-async def fetch_item_prices(
-    client: httpx.AsyncClient,
-    name: str,
-    settings: dict,
-    game: str = "cs2",
-) -> list:
+def _price_tasks(client, name: str, settings: dict, game: str):
     if game == "ko":
         from .ko_item import parse_ko_item
-
         parsed = parse_ko_item(name)
     else:
         parsed = parse_item_name(name)
@@ -50,12 +46,34 @@ async def fetch_item_prices(
             continue
         tasks.append(_source_fetch(sources[key], key, client, parsed, settings))
         keys.append(key)
-    results = await asyncio.gather(*tasks, return_exceptions=True)
+    return tasks, keys
+
+
+async def _run_source(key: str, coro):
+    from .sources.base import PriceResult
+    try:
+        return await asyncio.wait_for(coro, SOURCE_TIMEOUT)
+    except asyncio.TimeoutError:
+        return PriceResult(source=key, error="zaman aşımı — site yavaş yanıt verdi")
+    except Exception as e:
+        return PriceResult(source=key, error=f"{type(e).__name__}: {e}"[:200])
+
+
+async def iter_item_prices(client, name: str, settings: dict, game: str = "cs2"):
+    tasks, keys = _price_tasks(client, name, settings, game)
+    wrapped = [asyncio.create_task(_run_source(k, t)) for k, t in zip(keys, tasks)]
+    for fut in asyncio.as_completed(wrapped):
+        yield await fut
+
+
+async def fetch_item_prices(
+    client: httpx.AsyncClient,
+    name: str,
+    settings: dict,
+    game: str = "cs2",
+) -> list:
     out = []
-    for key, r in zip(keys, results):
-        if isinstance(r, Exception):
-            from .sources.base import PriceResult
-            r = PriceResult(source=key, error=f"{type(r).__name__}: {r}"[:200])
+    async for r in iter_item_prices(client, name, settings, game):
         out.append(r)
     return out
 
@@ -117,24 +135,13 @@ async def _resolve_from_waxpeer(client, target: str) -> set[str]:
 async def _resolve_from_dmarket(client, target: str, game: str, base_name: str) -> set[str]:
     out: set[str] = set()
     try:
-        from .sources.dmarket import API, CS2_GAME_ID, RUST_GAME_ID
+        from .sources.dmarket import CS2_GAME_ID, RUST_GAME_ID, cheapest_offer_usd
         gid = RUST_GAME_ID if game == "rust" else CS2_GAME_ID
-        r = await client.get(
-            API,
-            params={
-                "gameId": gid,
-                "title": base_name,
-                "limit": 100,
-                "currency": "USD",
-                "orderBy": "price",
-                "orderDir": "asc",
-            },
-            timeout=30,
-        )
-        r.raise_for_status()
-        for o in r.json().get("objects", []):
-            title = o.get("title", "")
-            if title and _name_matches(target, title, game):
+        for title in {base_name}:
+            if not title:
+                continue
+            price = await cheapest_offer_usd(client, title, gid)
+            if price is not None and _name_matches(target, title, game):
                 out.add(title)
     except Exception as e:
         status["errors"]["resolve_dmarket"] = f"{type(e).__name__}: {e}"[:200]
@@ -146,6 +153,13 @@ async def resolve_variants(query: str, game: str = "cs2") -> dict:
         return await _resolve_ko_variants(query)
 
     parsed = parse_item_name(query)
+    if game == "cs2":
+        local = cs2_wear_variants(parsed)
+        if len(local) > 1:
+            return {"variants": local}
+        if len(local) == 1:
+            return {"resolved": local[0]}
+
     target = norm(parsed.base_name)
     variants: set[str] = set()
 
@@ -238,7 +252,7 @@ async def run_cycle() -> dict:
     try:
         settings = get_settings()
         with get_conn() as conn:
-            items = conn.execute("SELECT * FROM items ORDER BY id").fetchall()
+            items = [dict(r) for r in conn.execute("SELECT * FROM items ORDER BY id").fetchall()]
 
         async with httpx.AsyncClient(follow_redirects=True) as client:
             for item in items:
@@ -252,35 +266,41 @@ async def run_cycle() -> dict:
 
 
 async def refresh_item(item_id: int) -> dict:
-    """Tek ürün için fiyat çek — arama sonrası hızlı güncelleme."""
-    if status["running"]:
-        return {"ok": False, "msg": "tam tarama sürüyor, biraz bekle"}
-    status["running"] = True
-    try:
-        settings = get_settings()
-        with get_conn() as conn:
-            item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
-        if not item:
-            return {"ok": False, "msg": "item bulunamadı"}
-        async with httpx.AsyncClient(follow_redirects=True) as client:
-            await _fetch_and_store(client, item, settings)
-        status["last_run"] = dt.datetime.now().isoformat(timespec="seconds")
-        return {"ok": True}
-    finally:
-        status["running"] = False
+    """Tek ürün için fiyat çek — arka plan taramasını beklemez."""
+    settings = get_settings()
+    with get_conn() as conn:
+        item = conn.execute("SELECT * FROM items WHERE id=?", (item_id,)).fetchone()
+    if not item:
+        return {"ok": False, "msg": "item bulunamadı"}
+    item = dict(item)
+    async with httpx.AsyncClient(follow_redirects=True, timeout=SOURCE_TIMEOUT) as client:
+        await _fetch_and_store(client, item, settings)
+    status["last_run"] = dt.datetime.now().isoformat(timespec="seconds")
+    return {"ok": True}
+
+
+async def _store_one_price(item: dict, game: str, r) -> None:
+    price_try = await fx.to_try(r.price, r.currency) if r.price else None
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO prices(item_id, source, price_orig, currency, price_try, url, error) "
+            "VALUES(?,?,?,?,?,?,?)",
+            (item["id"], r.source, r.price, r.currency, price_try, r.url, r.error),
+        )
+        if price_try is not None:
+            conn.execute(
+                "INSERT INTO price_history(game, name, source, price_try) VALUES(?,?,?,?)",
+                (game, item["name"], r.source, price_try),
+            )
 
 
 async def _fetch_and_store(client: httpx.AsyncClient, item, settings: dict):
     game = item["game"] if "game" in item.keys() else "cs2"
-    results = await fetch_item_prices(client, item["name"], settings, game=game)
-    with get_conn() as conn:
-        for r in results:
-            price_try = await fx.to_try(r.price, r.currency) if r.price else None
-            conn.execute(
-                "INSERT INTO prices(item_id, source, price_orig, currency, price_try, url, error) "
-                "VALUES(?,?,?,?,?,?,?)",
-                (item["id"], r.source, r.price, r.currency, price_try, r.url, r.error),
-            )
+    async for r in iter_item_prices(client, item["name"], settings, game=game):
+        try:
+            await _store_one_price(item, game, r)
+        except Exception as e:
+            status["errors"]["store"] = f"{type(e).__name__}: {e}"[:200]
     await check_alerts(item, settings)
 
 
@@ -440,12 +460,18 @@ def tl(v: float) -> str:
 
 
 async def scheduler_loop():
-    await asyncio.sleep(3)
+    # Panel önce açılsın; ilk tarama arayüzü kilitlemesin.
+    await asyncio.sleep(20)
     while True:
         try:
             await run_cycle()
         except Exception as e:
             status["errors"]["cycle"] = f"{type(e).__name__}: {e}"[:300]
+        try:
+            from .catalog import snapshot_catalogs
+            await snapshot_catalogs()
+        except Exception as e:
+            status["errors"]["catalog_snapshot"] = f"{type(e).__name__}: {e}"[:300]
         try:
             interval = max(1, int(float(get_settings().get("check_interval_min", "5"))))
         except ValueError:

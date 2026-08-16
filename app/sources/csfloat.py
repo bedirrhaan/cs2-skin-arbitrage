@@ -11,7 +11,7 @@ from urllib.parse import quote
 import httpx
 
 from .. import catalog_cache as cache
-from ..itemname import ParsedItem
+from ..itemname import ParsedItem, pick_catalog_row
 from .base import PriceResult
 
 CACHE_KEY = "csfloat:cs2"
@@ -38,7 +38,7 @@ async def _get_items(client: httpx.AsyncClient) -> dict:
         try:
             r = await client.get(
                 "https://csfloat.com/api/v1/listings/price-list",
-                timeout=90,
+                timeout=20,
             )
             if r.status_code == 429:
                 raise httpx.HTTPStatusError("rate limit", request=r.request, response=r)
@@ -60,7 +60,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
     res = PriceResult(source="csfloat", currency="USD")
     try:
         items = await _get_items(client)
-        it = items.get(parsed.full_name)
+        name, it = pick_catalog_row(items, parsed)
         if not it:
             res.error = "item bulunamadı"
             return res
@@ -72,7 +72,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
         res.price = min_price / 100.0
         res.url = (
             "https://csfloat.com/search?market_hash_name="
-            + quote(parsed.full_name)
+            + quote(name or parsed.full_name)
         )
     except httpx.HTTPStatusError:
         res.error = "CSFloat istek limiti — birkaç dakika sonra tekrar dene"

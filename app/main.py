@@ -10,8 +10,19 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import engine, telegram
+from .catalog import ensure_market_history, history_series, list_catalog, warm_catalogs
 from .catalog_cache import close as close_cache, init as init_cache
-from .db import get_conn, get_settings, init_db, set_settings
+from .db import (
+    add_depo,
+    depo_has,
+    get_conn,
+    get_settings,
+    init_db,
+    list_depo,
+    record_history,
+    remove_depo,
+    set_settings,
+)
 from .games import GAMES
 from .sources import SOURCES
 
@@ -23,6 +34,7 @@ async def lifespan(app: FastAPI):
     init_db()
     engine.status["cache_backend"] = await init_cache()
     task = asyncio.create_task(engine.scheduler_loop())
+    asyncio.create_task(warm_catalogs())
     yield
     task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -221,6 +233,82 @@ def get_status():
             "SELECT * FROM notifications ORDER BY id DESC LIMIT 20"
         ).fetchall()
     return {**engine.status, "notifications": [dict(n) for n in notifs]}
+
+
+# ---------- katalog / depo / grafik ----------
+
+@app.get("/api/catalog")
+async def api_catalog(game: str = "cs2", q: str = "", offset: int = 0, limit: int = 80):
+    if game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    try:
+        return await list_catalog(game, q=q, offset=offset, limit=limit)
+    except Exception as e:
+        return {
+            "items": [],
+            "total": 0,
+            "offset": offset,
+            "limit": limit,
+            "syncing": True,
+            "error": f"{type(e).__name__}: {e}"[:200],
+            "hint": "Katalog yerelde tutulur; Skinport limiti sayfayı kilitlemez.",
+        }
+
+
+@app.get("/api/catalog/history")
+async def api_history(game: str = "cs2", name: str = "", span: str = "1h"):
+    if game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    if not name.strip():
+        raise HTTPException(400, "isim gerekli")
+    if span not in ("1h", "1d", "1w", "1m"):
+        span = "1h"
+    nm = name.strip()
+    if game in ("cs2", "rust"):
+        try:
+            await ensure_market_history(game, nm, span)
+        except Exception:
+            pass
+    data = history_series(game, nm, span)
+    if not data.get("points") and game in ("cs2", "rust"):
+        try:
+            cat = await list_catalog(game, q=nm, offset=0, limit=20)
+            hit = next((x for x in cat.get("items") or [] if x.get("name") == nm), None)
+            if hit and hit.get("price_try") is not None:
+                record_history(game, nm, "skinport", hit["price_try"])
+                data = history_series(game, nm, span)
+        except Exception:
+            pass
+    data["in_depo"] = depo_has(game, nm)
+    return data
+
+
+@app.get("/api/depo")
+def api_depo_list(game: str = "cs2"):
+    if game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    return {"items": list_depo(game)}
+
+
+class DepoIn(BaseModel):
+    name: str
+    game: str = "cs2"
+
+
+@app.post("/api/depo")
+def api_depo_add(body: DepoIn):
+    if body.game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    try:
+        return add_depo(body.game, body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/depo/{depo_id}")
+def api_depo_del(depo_id: int):
+    remove_depo(depo_id)
+    return {"ok": True}
 
 
 # ---------- statik ----------
