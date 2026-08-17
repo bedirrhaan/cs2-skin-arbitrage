@@ -13,7 +13,7 @@ import httpx
 from bs4 import BeautifulSoup
 from ..itemname import ParsedItem, listing_contains_skin, norm, norm_listing
 from ..ko_item import ParsedKoItem, ko_listing_matches
-from .base import PriceResult, USER_AGENT
+from .base import PriceResult, USER_AGENT, attach_top_offers
 
 BASE = "https://www.kopazar.com"
 _cookies: httpx.Cookies | None = None
@@ -130,7 +130,7 @@ async def fetch_ko(client: httpx.AsyncClient, parsed: ParsedKoItem) -> PriceResu
             res.error = ("Reverse olmayan ilan yok" + rev_hint) if rev_hint else "ilan bulunamadı"
             res.url = search_url
             return res
-        res.price, res.url = min(candidates, key=lambda x: x[0])
+        attach_top_offers(res, candidates)
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res
@@ -205,8 +205,9 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
         if not candidates:
             res.error = "ilan bulunamadı"
             return res
-        res.price, listing_url = min(candidates, key=lambda x: x[0])
-        res.url = listing_url or url
+        attach_top_offers(res, candidates)
+        if not res.url:
+            res.url = url
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res

@@ -459,110 +459,38 @@ function enabledSourcesList() {
   return (SETTINGS[key] || SETTINGS.enabled_sources || Object.keys(SOURCES).join(",")).split(",");
 }
 
-function cheapestThreeFromItem(it) {
-  if (it.cheapest && it.cheapest.length) return it.cheapest;
-  const ranked = Object.entries(it.prices || {})
-    .filter(([, p]) => p && p.price_try != null)
-    .map(([src, p]) => ({
-      rank: 0,
-      source: src,
-      label: SOURCES[src] || src,
-      price: p.price_try,
-      url: p.url,
-      diff_prev: null,
-    }))
-    .sort((a, b) => a.price - b.price)
-    .slice(0, 3);
-  ranked.forEach((row, i) => {
-    row.rank = i + 1;
-    if (i > 0) row.diff_prev = Math.round((row.price - ranked[i - 1].price) * 100) / 100;
-  });
-  return ranked;
+function listingOffers(p) {
+  const raw = (p && p.offers) || [];
+  const rows = raw
+    .filter((o) => o && o.price_try != null)
+    .map((o) => ({ price: Number(o.price_try), url: o.url || p.url }));
+  if (!rows.length && p && p.price_try != null) {
+    rows.push({ price: Number(p.price_try), url: p.url });
+  }
+  rows.sort((a, b) => a.price - b.price);
+  return rows.slice(0, 3).map((o, i, all) => ({
+    rank: i + 1,
+    price: o.price,
+    url: o.url,
+    diff_prev: i ? Math.round((o.price - all[i - 1].price) * 100) / 100 : null,
+  }));
 }
 
-function renderCheapestPodium(it) {
-  const rows = cheapestThreeFromItem(it);
-  if (!rows.length) return "";
-  const medals = ["1. En ucuz", "2. Sıradaki uygun", "3. Sonraki uygun"];
-  const items = rows.map((r, i) => {
-    const gap = i === 0
-      ? `<span class="cheap-gap cheap-gap-best">en ucuz ilan</span>`
-      : `<span class="cheap-gap">${i}. sıraya göre <b>${fmtTL(r.diff_prev)}</b> fark</span>`;
-    const inner = `
-      <div class="cheap-rank">#${r.rank}</div>
-      <div class="cheap-body">
-        <div class="cheap-title">${medals[i] || (r.rank + ".")}</div>
-        <div class="cheap-src">${esc(r.label)}</div>
-        <div class="cheap-price">${fmtTL(r.price)}</div>
-        ${gap}
-      </div>`;
-    return r.url
-      ? `<a class="cheap-card r${r.rank}" href="${esc(r.url)}" target="_blank" rel="noopener">${inner}</a>`
-      : `<div class="cheap-card r${r.rank}">${inner}</div>`;
+function renderOfferList(p) {
+  const rows = listingOffers(p);
+  if (!rows.length) return `<div class="val">${fmtTL(p.price_try)}</div><div class="orig">${fmtOrig(p)}</div>`;
+  return rows.map((o) => {
+    const gap = o.rank === 1
+      ? `<span class="offer-gap">en ucuz ilan</span>`
+      : `<span class="offer-gap">${o.rank - 1}. ilana göre <b>${fmtTL(o.diff_prev)}</b> fark</span>`;
+    const body = `<span class="offer-rank">${o.rank}.</span><span class="offer-price">${fmtTL(o.price)}</span>${gap}`;
+    return o.url
+      ? `<a class="offer-line r${o.rank}" href="${esc(o.url)}" target="_blank" rel="noopener">${body}</a>`
+      : `<div class="offer-line r${o.rank}">${body}</div>`;
   }).join("");
-  return `<div class="cheap-podium"><div class="cheap-podium-label">En uygun 3 ilan</div><div class="cheap-row">${items}</div></div>`;
 }
 
 function renderItem(it) {
-  const enabled = enabledSourcesList();
-  const scanning = currentItemId === it.id && window._priceScan;
-  const top = cheapestThreeFromItem(it);
-  const rankOf = Object.fromEntries(top.map((r) => [r.source, r.rank]));
-  const cells = enabled.filter((s) => SOURCES[s]).map((src) => {
-    const p = it.prices[src];
-    const label = SOURCES[src];
-    if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${scanning ? "taranıyor…" : "henüz veri yok"}</div></div>`;
-    if (p.error || p.price_try == null)
-      return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${esc(p.error || "veri yok")}</div></div>`;
-    const rk = rankOf[src];
-    const cls = rk ? `rank-${rk}` : (it.spread && src === it.spread.high_source ? "high" : "");
-    const inner = `<div class="src">${label}${rk ? ` · ${rk}.` : ""}</div><div class="val">${fmtTL(p.price_try)}</div><div class="orig">${fmtOrig(p)}</div>`;
-    return `<div class="price-cell ${cls}">${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${inner}</a>` : inner}</div>`;
-  }).join("");
-
-  const spread = it.spread
-    ? `<span class="spread-badge ${it.spread.spread_pct >= 10 ? "hot" : ""}">makas %${it.spread.spread_pct.toFixed(1)}</span>`
-    : "";
-
-  const alerts = it.alerts.map((a) => {
-    const desc =
-      a.kind === "below" ? `📉 ${a.source ? SOURCES[a.source] : "en ucuz"} ≤ ${fmtTL(a.threshold)}` :
-      a.kind === "above" ? `📈 ${a.source ? SOURCES[a.source] : "en ucuz"} ≥ ${fmtTL(a.threshold)}` :
-      `⚖️ makas ≥ %${a.threshold}`;
-    return `<span class="alert-chip ${a.enabled ? "" : "disabled"}">
-      ${desc}
-      <button title="aç/kapat" onclick="toggleAlert(${a.id})">${a.enabled ? "⏸" : "▶"}</button>
-      <button title="sil" onclick="deleteAlert(${a.id})">✕</button>
-    </span>`;
-  }).join("");
-
-  const srcOpts = Object.entries(SOURCES)
-    .map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
-
-  return `<div class="item-card" data-id="${it.id}">
-    <div class="item-head">
-      <span class="item-name">${esc(it.name)}</span>
-      ${spread}
-      <span class="spacer"></span>
-      <button class="btn btn-primary btn-sm" onclick="followSearchItem(${it.id})">${TAKIP_NAMES.has(it.name) ? "Takiptesin" : "Takibe ekle"}</button>
-      <button class="btn btn-ghost btn-sm" onclick="toggleAlertForm(${it.id})">+ alarm</button>
-      <button class="btn btn-danger btn-sm" onclick="deleteItem(${it.id}, '${esc(it.name).replace(/'/g, "\\'")}')">sil</button>
-    </div>
-    ${renderCheapestPodium(it)}
-    <div class="price-row">${cells}</div>
-    <div class="alerts-box">${alerts}</div>
-    <div class="alert-form" id="alertForm-${it.id}">
-      <select id="alertKind-${it.id}" onchange="onKindChange(${it.id})">
-        <option value="below">fiyat altına inince</option>
-        <option value="above">fiyat üstüne çıkınca</option>
-        <option value="spread">siteler arası makas (%)</option>
-      </select>
-      <select id="alertSource-${it.id}"><option value="">en ucuz kaynak</option>${srcOpts}</select>
-      <input type="number" id="alertThreshold-${it.id}" placeholder="eşik" step="any">
-      <button class="btn btn-primary btn-sm" onclick="addAlert(${it.id})">kaydet</button>
-    </div>
-  </div>`;
-}
   const enabled = enabledSourcesList();
   const scanning = currentItemId === it.id && window._priceScan;
   const cells = enabled.filter((s) => SOURCES[s]).map((src) => {
@@ -574,8 +502,8 @@ function renderItem(it) {
     const cls = it.spread
       ? src === it.spread.low_source ? "low" : src === it.spread.high_source ? "high" : ""
       : "";
-    const inner = `<div class="src">${label}</div><div class="val">${fmtTL(p.price_try)}</div><div class="orig">${fmtOrig(p)}</div>`;
-    return `<div class="price-cell ${cls}">${p.url ? `<a href="${esc(p.url)}" target="_blank" rel="noopener">${inner}</a>` : inner}</div>`;
+    const inner = `<div class="src">${label}</div><div class="offer-list">${renderOfferList(p)}</div>`;
+    return `<div class="price-cell ${cls}">${inner}</div>`;
   }).join("");
 
   const spread = it.spread

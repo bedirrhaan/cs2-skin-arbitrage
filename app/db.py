@@ -111,7 +111,10 @@ def _migrate_items_game(conn: sqlite3.Connection):
     """)
 
 
-def _migrate_catalog_rank(conn: sqlite3.Connection):
+def _migrate_price_offers(conn: sqlite3.Connection):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(prices)").fetchall()}
+    if cols and "offers" not in cols:
+        conn.execute("ALTER TABLE prices ADD COLUMN offers TEXT")
     cols = {r[1] for r in conn.execute("PRAGMA table_info(catalog_names)").fetchall()}
     if not cols:
         return
@@ -231,6 +234,7 @@ def init_db():
             conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES(?,?)", (k, v))
         _migrate_settings(conn)
         _migrate_catalog_rank(conn)
+        _migrate_price_offers(conn)
         _apply_env_settings(conn)
         _append_missing_sources(conn)
 

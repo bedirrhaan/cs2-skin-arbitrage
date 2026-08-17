@@ -10,10 +10,11 @@ import httpx
 
 from ..itemname import ParsedItem, listing_matches_parsed
 from ..ko_item import bng_name_matches
-from .base import PriceResult, USER_AGENT
+from .base import PriceResult, USER_AGENT, attach_top_offers
 API = "https://gw.bynogame.com/steam-products/v2/products"
 KO_PRODUCTS_API = "https://gw.bynogame.com/knight-items/v2/products"
 KO_LISTINGS_API = "https://gw.bynogame.com/knight-item-listings/v2/listings"
+STEAM_LISTINGS_API = "https://gw.bynogame.com/steam-listings/v2/listings"
 BASE = "https://www.bynogame.com"
 _HEADERS = {
     "User-Agent": USER_AGENT,
@@ -82,17 +83,49 @@ async def _fetch(
             res.error = "satışta yok"
             return res
         match, price = min(priced, key=lambda x: x[1])
-
         slug = match.get("slug", "")
-        lid = match.get("cheapestListingId")
-        if slug and lid:
-            res.url = f"{BASE}/tr/oyunlar/{path}/{slug}?id={lid}"
-        elif slug:
-            res.url = f"{BASE}/tr/oyunlar/{path}/{slug}"
-        res.price = float(price)
+        pid = match.get("id")
+        offers = []
+        if pid is not None:
+            for L in await _steam_listings(client, int(pid)):
+                try:
+                    p = float(L.get("price") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if p <= 0:
+                    continue
+                lid = L.get("id")
+                sl = L.get("slug") or ""
+                if not sl and slug and lid:
+                    sl = f"{slug}?id={lid}"
+                url = f"{BASE}/tr/oyunlar/{path}/{sl}" if sl else None
+                offers.append((p, url))
+        if offers:
+            attach_top_offers(res, offers)
+        else:
+            lid = match.get("cheapestListingId")
+            if slug and lid:
+                res.url = f"{BASE}/tr/oyunlar/{path}/{slug}?id={lid}"
+            elif slug:
+                res.url = f"{BASE}/tr/oyunlar/{path}/{slug}"
+            res.price = float(price)
+            attach_top_offers(res, [(float(price), res.url)])
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res
+
+
+async def _steam_listings(client: httpx.AsyncClient, product_id: int) -> list[dict]:
+    url = (
+        f"{STEAM_LISTINGS_API}?page=1&limit=20&sort=Price:1"
+        f"&filters=Product:{product_id};OnlyInStock:true"
+    )
+    r = await client.get(url, headers=_HEADERS, timeout=30)
+    r.raise_for_status()
+    body = r.json()
+    if not body.get("success"):
+        return []
+    return body.get("data", {}).get("result") or []
 
 
 async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
@@ -260,25 +293,32 @@ async def fetch_ko(client: httpx.AsyncClient, parsed) -> PriceResult:
                 seen_ids.add(pid)
                 products.append(item)
 
-        matches: list[tuple[float, str, str]] = []
+        offers = []
         for item in products:
             title = item.get("displayName") or item.get("displayNameShort") or item.get("name") or ""
             if not bng_name_matches(parsed, title):
                 continue
             pid = item.get("id")
             slug = item.get("slug") or ""
-            if pid is None or not slug:
+            if pid is None:
                 continue
-            price = await _ko_min_listing_price(client, int(pid))
-            if price is None or price <= 0:
-                continue
-            matches.append((price, f"{BASE}/tr/oyunlar/knight-online/{slug}", search_url))
+            for L in await _ko_listings(client, int(pid), in_stock_only=True, pages=2):
+                try:
+                    p = float(L.get("price") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if p <= 0:
+                    continue
+                lid = L.get("id")
+                sl = L.get("slug") or (f"{slug}?id={lid}" if slug and lid else slug)
+                url = f"{BASE}/tr/oyunlar/knight-online/{sl}" if sl else search_url
+                offers.append((p, url))
 
-        if not matches:
+        if not offers:
             res.error = "ilan bulunamadı"
             res.url = search_url
             return res
-        res.price, res.url, _ = min(matches, key=lambda x: x[0])
+        attach_top_offers(res, offers)
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
         res.url = search_url

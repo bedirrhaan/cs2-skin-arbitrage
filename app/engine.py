@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import datetime as dt
+import json
 
 import httpx
 
@@ -281,11 +282,32 @@ async def refresh_item(item_id: int) -> dict:
 
 async def _store_one_price(item: dict, game: str, r) -> None:
     price_try = await fx.to_try(r.price, r.currency) if r.price else None
+    offers_out = []
+    for o in r.offers or []:
+        op = o.get("price")
+        ot = await fx.to_try(op, r.currency) if op is not None else None
+        if ot is None:
+            continue
+        offers_out.append({
+            "price_try": round(float(ot), 2),
+            "url": o.get("url"),
+            "price_orig": op,
+            "currency": r.currency,
+        })
+        if price_try is None:
+            price_try = float(ot)
+    if offers_out and (price_try is None or (r.price is None and offers_out)):
+        price_try = offers_out[0]["price_try"]
+        if not r.url:
+            r.url = offers_out[0].get("url")
     with get_conn() as conn:
         conn.execute(
-            "INSERT INTO prices(item_id, source, price_orig, currency, price_try, url, error) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (item["id"], r.source, r.price, r.currency, price_try, r.url, r.error),
+            "INSERT INTO prices(item_id, source, price_orig, currency, price_try, url, error, offers) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (
+                item["id"], r.source, r.price, r.currency, price_try, r.url, r.error,
+                json.dumps(offers_out) if offers_out else None,
+            ),
         )
         if price_try is not None:
             conn.execute(
@@ -312,7 +334,19 @@ def latest_prices(item_id: int) -> dict:
                ON p.id = x.mid""",
             (item_id,),
         ).fetchall()
-    return {r["source"]: dict(r) for r in rows}
+    out = {}
+    for r in rows:
+        d = dict(r)
+        raw = d.get("offers")
+        if isinstance(raw, str) and raw.strip():
+            try:
+                d["offers"] = json.loads(raw)
+            except json.JSONDecodeError:
+                d["offers"] = []
+        elif not raw:
+            d["offers"] = []
+        out[r["source"]] = d
+    return out
 
 
 def spread_info(prices: dict) -> dict | None:

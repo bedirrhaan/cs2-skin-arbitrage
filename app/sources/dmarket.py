@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 from ..itemname import ParsedItem, cs2_wear_variants
-from .base import USER_AGENT, PriceResult
+from .base import USER_AGENT, PriceResult, attach_top_offers
 
 API = "https://api.dmarket.com/marketplace-api/v1/market-depth"
 CS2_GAME_ID = "a8db"
@@ -24,9 +24,9 @@ def _cent_price(raw) -> float | None:
         return None
 
 
-async def cheapest_offer_usd(
-    client: httpx.AsyncClient, title: str, game_id: str
-) -> float | None:
+async def _offer_rows(
+    client: httpx.AsyncClient, title: str, game_id: str, url_base: str
+) -> list[tuple[float, str]]:
     r = await client.get(
         API,
         params={"gameId": game_id, "title": title},
@@ -34,13 +34,25 @@ async def cheapest_offer_usd(
         timeout=30,
     )
     r.raise_for_status()
-    offers = r.json().get("offers") or []
-    prices = []
-    for o in offers:
+    rows = []
+    for o in r.json().get("offers") or []:
         p = _cent_price(o.get("price"))
-        if p is not None:
-            prices.append(p)
-    return min(prices) if prices else None
+        if p is None:
+            continue
+        extra = o.get("extra") or {}
+        iid = extra.get("link") or extra.get("itemId") or o.get("itemId") or o.get("offerId")
+        url = url_base + quote(title)
+        if iid:
+            url = f"https://dmarket.com/ingame-items/item/{iid}"
+        rows.append((p, url))
+    return rows
+
+
+async def cheapest_offer_usd(
+    client: httpx.AsyncClient, title: str, game_id: str
+) -> float | None:
+    rows = await _offer_rows(client, title, game_id, "")
+    return min((p for p, _ in rows), default=None)
 
 
 async def _fetch(
@@ -58,22 +70,24 @@ async def _fetch(
             if t and t not in seen:
                 seen.add(t)
                 titles.append(t)
-        best = None
+        best_rows: list[tuple[float, str]] = []
         best_title = None
         for title in titles:
-            price = await cheapest_offer_usd(client, title, game_id)
-            if price is None:
+            rows = await _offer_rows(client, title, game_id, url_base)
+            if not rows:
                 continue
-            if best is None or price < best:
-                best = price
+            low = min(p for p, _ in rows)
+            if not best_rows or low < min(p for p, _ in best_rows):
+                best_rows = rows
                 best_title = title
             if parsed.wear:
                 break
-        if best is None:
+        if not best_rows:
             res.error = "ilan bulunamadı"
             return res
-        res.price = best
-        res.url = url_base + quote(best_title or parsed.full_name)
+        attach_top_offers(res, best_rows)
+        if not res.url:
+            res.url = url_base + quote(best_title or parsed.full_name)
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res
