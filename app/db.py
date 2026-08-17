@@ -77,6 +77,12 @@ CREATE TABLE IF NOT EXISTS catalog_names (
     PRIMARY KEY (game, name)
 );
 CREATE INDEX IF NOT EXISTS idx_catalog_game_name ON catalog_names(game, name);
+CREATE TABLE IF NOT EXISTS popular_hits (
+    game TEXT NOT NULL,
+    name TEXT NOT NULL,
+    last_notified_at TEXT,
+    PRIMARY KEY (game, name)
+);
 """
 
 DEFAULT_SETTINGS = {
@@ -89,6 +95,8 @@ DEFAULT_SETTINGS = {
     "enabled_sources_cs2": "steam,skinport,dmarket,bitskins,kopazar,gamesatis,bynogame,csfloat,itemsatis,itemci",
     "enabled_sources_rust": "skinport,dmarket,rust_tm,bynogame,waxpeer,steam,gamesatis",
     "enabled_sources_ko": "kopazar,bynogame",
+    "popular_top_n": "20",
+    "popular_min_spread": "8",
 }
 
 
@@ -454,6 +462,40 @@ def upsert_catalog(game: str, rows: list[tuple]) -> int:
             batch,
         )
     return len(batch)
+
+
+def top_popular_names(game: str, limit: int = 20) -> list[dict]:
+    """Popüler / çok satan katalog: Steam trend skoru, yoksa stok (quantity)."""
+    limit = min(max(int(limit or 20), 5), 25)
+    with get_conn() as conn:
+        rows = conn.execute(
+            """SELECT name, quantity, rank_score, chg_24h, chg_48h, url
+               FROM catalog_names
+               WHERE game=?
+               ORDER BY CASE
+                 WHEN rank_score IS NULL THEN 1
+                 WHEN rank_score > 0 THEN 0
+                 ELSE 2 END,
+                 rank_score DESC, quantity DESC, name
+               LIMIT ?""",
+            (game, limit),
+        ).fetchall()
+        listed = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM items WHERE game=?", (game,)).fetchall()
+        }
+        tracked = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM depo WHERE game=?", (game,)).fetchall()
+        }
+    out = []
+    for i, r in enumerate(rows, 1):
+        d = dict(r)
+        d["rank"] = i
+        d["in_list"] = d["name"] in listed
+        d["in_depo"] = d["name"] in tracked
+        out.append(d)
+    return out
 
 
 def catalog_ranked_count(game: str) -> int:

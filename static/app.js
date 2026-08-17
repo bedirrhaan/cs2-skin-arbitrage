@@ -97,6 +97,7 @@ const HUB_COPY = {
   ara: { title: "Item Ara", lead: "Oyunu seç. CS2, Rust veya Knight Online aramasına geçersin." },
   listele: { title: "Item Listele", lead: "Oyunu seç. Tüm isimler listelenir; birine basınca fiyat grafiği açılır." },
   depo: { title: "Takip", lead: "Oyunu seç. Beğenip takibe aldığın itemler burada." },
+  opps: { title: "Fırsatlar", lead: "Oyunu seç. Popüler / çok satan ilk 5–25 item taranır; fırsat varsa listende olmasa da bildirilir." },
 };
 
 function toggleSidebar() {
@@ -125,11 +126,6 @@ function goSection(sec) {
   setNav();
   closeSidebar();
   hideViews();
-  if (sec === "opps") {
-    document.getElementById("viewOpps").style.display = "";
-    loadOpportunities();
-    return;
-  }
   const copy = HUB_COPY[sec] || HUB_COPY.ara;
   document.getElementById("hubTitle").textContent = copy.title;
   document.getElementById("hubLead").textContent = copy.lead;
@@ -152,6 +148,9 @@ async function pickGame(game) {
   } else if (currentSection === "depo") {
     document.getElementById("viewDepo").style.display = "";
     await loadDepo();
+  } else if (currentSection === "opps") {
+    document.getElementById("viewOpps").style.display = "";
+    loadOpportunities(false);
   }
 }
 
@@ -165,13 +164,6 @@ function applyGameUi() {
   const hint = document.getElementById("searchHint");
   if (inp) inp.placeholder = ui.placeholder;
   if (hint) hint.innerHTML = ui.hint;
-  const hideDiscounts = currentGame === "rust" || currentGame === "ko";
-  const t = document.getElementById("oppDiscountTitle");
-  const h = document.getElementById("oppDiscountHint");
-  const d = document.getElementById("oppDiscounts");
-  if (t) t.style.display = hideDiscounts ? "none" : "";
-  if (h) h.style.display = hideDiscounts ? "none" : "";
-  if (d) d.style.display = hideDiscounts ? "none" : "";
   if (document.getElementById("settingsModal").classList.contains("open")) renderSourceChecks();
 }
 
@@ -280,6 +272,9 @@ function backFromChart() {
   if (chartFrom === "depo") {
     document.getElementById("viewDepo").style.display = "";
     loadDepo();
+  } else if (chartFrom === "opps") {
+    document.getElementById("viewOpps").style.display = "";
+    loadOpportunities(false);
   } else {
     document.getElementById("viewCatalog").style.display = "";
   }
@@ -292,14 +287,14 @@ async function openChart(name, from) {
   hideViews();
   document.getElementById("viewChart").style.display = "";
   document.getElementById("chartName").textContent = name;
-  document.querySelectorAll(".span-btn").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
+  document.querySelectorAll(".span-btn[data-span]").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
   await renderChart();
   loadChartMarkets(name);
 }
 
 function setChartSpan(span) {
   chartSpan = span;
-  document.querySelectorAll(".span-btn").forEach((b) => b.classList.toggle("on", b.dataset.span === span));
+  document.querySelectorAll(".span-btn[data-span]").forEach((b) => b.classList.toggle("on", b.dataset.span === span));
   renderChart();
 }
 
@@ -722,68 +717,114 @@ function switchView(v) {
 }
 
 /* ---------- fırsatlar ---------- */
-async function loadOpportunities() {
+let oppPoll = null;
+let oppTopN = parseInt(localStorage.getItem("oppTopN") || "20", 10) || 20;
+
+function oppSelectedN() {
+  const on = document.querySelector("#oppTopN .span-btn.on");
+  return parseInt(on && on.dataset.n, 10) || oppTopN;
+}
+
+function bindOppTopN() {
+  document.querySelectorAll("#oppTopN .span-btn").forEach((b) => {
+    b.classList.toggle("on", parseInt(b.dataset.n, 10) === oppTopN);
+    b.onclick = () => {
+      oppTopN = parseInt(b.dataset.n, 10) || 20;
+      localStorage.setItem("oppTopN", String(oppTopN));
+      document.querySelectorAll("#oppTopN .span-btn").forEach((x) => x.classList.toggle("on", x === b));
+    };
+  });
+}
+
+async function loadOpportunities(scan) {
   const btn = document.getElementById("oppRefreshBtn");
-  btn.disabled = true;
-  btn.textContent = "⏳";
+  const meta = document.getElementById("oppScanMeta");
   const minSpread = parseFloat(document.getElementById("oppMinSpread").value) || 0;
-  const minDiscount = parseFloat(document.getElementById("oppMinDiscount").value) || 0;
+  const notify = document.getElementById("oppNotify").checked;
+  const limit = oppSelectedN();
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "⏳";
+  }
   try {
-    const d = await api(`/api/opportunities?min_spread=${minSpread}&min_discount=${minDiscount}&game=${currentGame}`);
-    renderSpreads(d.spreads || []);
-    renderDiscounts(d.discounts || []);
-  } catch (e) { toast(e.message, "err"); }
-  btn.disabled = false;
-  btn.textContent = "↻ Yenile";
+    let d;
+    if (scan) {
+      d = await api("/api/opportunities/scan", {
+        method: "POST",
+        body: JSON.stringify({ game: currentGame, limit, min_spread: minSpread, notify }),
+      });
+    } else {
+      d = await api(`/api/opportunities?game=${currentGame}`);
+    }
+    paintOpportunities(d);
+    if (d.running) {
+      if (meta) meta.textContent = `Tarama sürüyor… ${d.progress || 0}/${d.total || limit}`;
+      clearInterval(oppPoll);
+      oppPoll = setInterval(() => pollOpportunities(), 2000);
+    } else {
+      clearInterval(oppPoll);
+      oppPoll = null;
+    }
+  } catch (e) {
+    toast(e.message, "err");
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "↻ Tara";
+  }
+}
+
+async function pollOpportunities() {
+  try {
+    const d = await api(`/api/opportunities?game=${currentGame}`);
+    paintOpportunities(d);
+    if (!d.running) {
+      clearInterval(oppPoll);
+      oppPoll = null;
+    }
+  } catch {}
+}
+
+function paintOpportunities(d) {
+  const meta = document.getElementById("oppScanMeta");
+  const n = d.total || d.limit || oppSelectedN();
+  if (meta) {
+    if (d.running) meta.textContent = `Popüler ilk ${n} taranıyor… ${d.progress || 0}/${n}`;
+    else if (d.at) meta.textContent = `Son tarama: ${d.at} · ilk ${d.limit || n} · ${d.hits ? d.hits.length : 0} fırsat`;
+    else meta.textContent = `Hazır. Popüler ilk ${n} itemi tara — listende olmayanlar da bildirilir.`;
+  }
+  renderSpreads(d.hits || []);
 }
 
 function renderSpreads(rows) {
   const box = document.getElementById("oppSpreads");
+  if (!box) return;
   if (!rows.length) {
-    box.innerHTML = `<div class="empty small"><p>Şu an eşiği aşan makas yok.<br>
-      Arama sekmesinden ürün ekledikçe burada karşılaştırma birikir.</p></div>`;
+    box.innerHTML = `<div class="empty small"><p>Henüz fırsat yok. “Tara” ile popüler listedeki ilk itemler taranır.<br>
+      Siteler arası makas eşiği aşınca burada görünür; Telegram açıksa listede olmasa da gelir.</p></div>`;
     return;
   }
   box.innerHTML = rows.map((r) => `
-    <div class="opp-card">
+    <div class="opp-card" data-name="${esc(r.name)}" onclick="openChart(this.dataset.name,'opps')">
       <div class="opp-head">
+        <span class="opp-rank">#${r.rank}</span>
         <span class="opp-name">${esc(r.name)}</span>
-        <span class="spread-badge ${r.spread_pct >= 15 ? "hot" : ""}">%${r.spread_pct.toFixed(1)} fark</span>
+        <span class="spread-badge ${r.spread_pct >= 15 ? "hot" : ""}">%${Number(r.spread_pct).toFixed(1)} fark</span>
+        ${r.in_list ? "" : `<span class="opp-new">listede yok</span>`}
       </div>
       <div class="opp-compare">
         <div class="opp-side buy">
           <div class="opp-side-label">💰 En ucuz — ${esc(r.low_label)}</div>
           <div class="opp-side-price">${fmtTL(r.low)}</div>
-          ${r.low_url ? `<a href="${esc(r.low_url)}" target="_blank" rel="noopener" class="opp-link">ilana git →</a>` : ""}
+          ${r.low_url ? `<a href="${esc(r.low_url)}" target="_blank" rel="noopener" class="opp-link" onclick="event.stopPropagation()">ilana git →</a>` : ""}
         </div>
         <div class="opp-arrow">➜</div>
         <div class="opp-side sell">
           <div class="opp-side-label">🏷️ En pahalı — ${esc(r.high_label)}</div>
           <div class="opp-side-price">${fmtTL(r.high)}</div>
-          ${r.high_url ? `<a href="${esc(r.high_url)}" target="_blank" rel="noopener" class="opp-link">ilana git →</a>` : ""}
+          ${r.high_url ? `<a href="${esc(r.high_url)}" target="_blank" rel="noopener" class="opp-link" onclick="event.stopPropagation()">ilana git →</a>` : ""}
         </div>
         <div class="opp-profit">aradaki fark<br><b>${fmtTL(r.diff)}</b></div>
-      </div>
-    </div>`).join("");
-}
-
-function renderDiscounts(rows) {
-  const box = document.getElementById("oppDiscounts");
-  if (!rows.length) {
-    box.innerHTML = `<div class="empty small"><p>Eşiği aşan indirim bulunamadı.</p></div>`;
-    return;
-  }
-  box.innerHTML = rows.map((r) => `
-    <div class="opp-card discount">
-      <div class="opp-head">
-        <span class="opp-name">${esc(r.name)}</span>
-        <span class="spread-badge hot">-%${r.discount_pct.toFixed(0)}</span>
-      </div>
-      <div class="opp-discount-row">
-        <span class="opp-old">${fmtTL(r.suggested)}</span>
-        <span class="opp-new">${fmtTL(r.price)}</span>
-        <span class="opp-qty">${r.quantity} adet</span>
-        ${r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" class="opp-link">Skinport'ta gör →</a>` : ""}
       </div>
     </div>`).join("");
 }
@@ -887,6 +928,10 @@ async function loadSettings() {
   document.getElementById("tgChat").value = SETTINGS.telegram_chat_id || "";
   document.getElementById("setInterval").value = SETTINGS.check_interval_min || 5;
   document.getElementById("setBitskins").value = SETTINGS.bitskins_api_key || "";
+  if (SETTINGS.popular_min_spread) document.getElementById("oppMinSpread").value = SETTINGS.popular_min_spread;
+  const n = parseInt(SETTINGS.popular_top_n || oppTopN, 10);
+  if (n) { oppTopN = n; localStorage.setItem("oppTopN", String(n)); }
+  bindOppTopN();
   renderSourceChecks();
 }
 
@@ -976,6 +1021,7 @@ document.addEventListener("keydown", (e) => {
   applyGameUi();
   goSection("ara");
   await loadSettings();
+  bindOppTopN();
   await loadStatus();
   setInterval(() => {
     if (document.getElementById("viewSearch").style.display !== "none") loadItems();

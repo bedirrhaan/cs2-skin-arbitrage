@@ -7,14 +7,22 @@ import json
 import httpx
 
 from . import fx, telegram
-from .db import enabled_sources_for, get_conn, get_settings
+from .db import enabled_sources_for, get_conn, get_settings, top_popular_names
 from .games import GAMES
 from .itemname import cs2_wear_variants, norm, parse_item_name
 from .sources import skinport
 from .sources.base import PriceResult, short_error
 from .sources.skinport import CS2_APP_ID, RUST_APP_ID
 
-status: dict = {"last_run": None, "running": False, "errors": {}, "next_run": None}
+status: dict = {
+    "last_run": None,
+    "running": False,
+    "errors": {},
+    "next_run": None,
+    "popular_running": False,
+    "popular_game": None,
+    "popular": {},
+}
 
 SOURCE_TIMEOUT = 22.0
 
@@ -388,68 +396,194 @@ def cheapest_three(prices: dict, labels: dict | None = None, n: int = 3) -> list
     return ranked
 
 
+async def _live_prices(client, name: str, settings: dict, game: str) -> dict:
+    """Item tablosuna yazmadan canlı fiyat çek."""
+    out = {}
+    async for r in iter_item_prices(client, name, settings, game=game):
+        price_try = await fx.to_try(r.price, r.currency) if r.price else None
+        offers_out = []
+        for o in r.offers or []:
+            op = o.get("price")
+            ot = await fx.to_try(op, r.currency) if op is not None else None
+            if ot is None:
+                continue
+            offers_out.append({
+                "price_try": round(float(ot), 2),
+                "url": o.get("url"),
+            })
+            if price_try is None:
+                price_try = float(ot)
+        out[r.source] = {
+            "price_try": price_try,
+            "url": r.url,
+            "error": r.error,
+            "offers": offers_out,
+        }
+    return out
+
+
+def popular_status(game: str) -> dict:
+    d = dict(status.get("popular", {}).get(game) or {
+        "hits": [], "scanned": [], "progress": 0, "total": 0, "limit": 20,
+        "min_spread": 8, "at": None,
+    })
+    d["running"] = bool(status.get("popular_running") and status.get("popular_game") == game)
+    d["ok"] = True
+    return d
+
+
+async def start_popular_scan(
+    game: str, limit: int = 20, min_spread: float = 8.0, notify: bool = True
+) -> dict:
+    if status.get("popular_running"):
+        cur = popular_status(game)
+        cur["msg"] = "tarama sürüyor"
+        return cur
+    asyncio.create_task(scan_popular(game, limit, min_spread, notify))
+    return popular_status(game) | {"running": True, "ok": True}
+
+
+async def scan_popular(
+    game: str,
+    limit: int = 20,
+    min_spread: float = 8.0,
+    notify: bool = True,
+) -> dict:
+    if status.get("popular_running"):
+        return popular_status(game)
+    status["popular_running"] = True
+    status["popular_game"] = game
+    limit = min(max(int(limit or 20), 5), 25)
+    min_spread = max(float(min_spread or 0), 0)
+    labels = source_labels(game)
+    rows = top_popular_names(game, limit)
+    payload = {
+        "hits": [],
+        "scanned": [r["name"] for r in rows],
+        "progress": 0,
+        "total": len(rows),
+        "limit": limit,
+        "min_spread": min_spread,
+        "at": None,
+        "game": game,
+    }
+    status["popular"][game] = payload
+    settings = get_settings()
+    hits = []
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=SOURCE_TIMEOUT) as client:
+            for row in rows:
+                prices = await _live_prices(client, row["name"], settings, game)
+                payload["progress"] += 1
+                status["popular"][game] = payload
+                sp = spread_info(prices)
+                if not sp or sp["spread_pct"] < min_spread:
+                    continue
+                steam = (prices.get("steam") or {}).get("price_try")
+                vs_steam = None
+                if steam and sp["low"] < steam:
+                    vs_steam = round((steam - sp["low"]) / steam * 100, 1)
+                hit = {
+                    "rank": row["rank"],
+                    "name": row["name"],
+                    "in_list": row["in_list"],
+                    "in_depo": row["in_depo"],
+                    "low_source": sp["low_source"],
+                    "low_label": labels.get(sp["low_source"], sp["low_source"]),
+                    "low": sp["low"],
+                    "low_url": (prices.get(sp["low_source"]) or {}).get("url"),
+                    "high_source": sp["high_source"],
+                    "high_label": labels.get(sp["high_source"], sp["high_source"]),
+                    "high": sp["high"],
+                    "high_url": (prices.get(sp["high_source"]) or {}).get("url"),
+                    "spread_pct": sp["spread_pct"],
+                    "diff": round(sp["high"] - sp["low"], 2),
+                    "steam": steam,
+                    "vs_steam": vs_steam,
+                }
+                hits.append(hit)
+                payload["hits"] = hits
+                status["popular"][game] = payload
+                if notify:
+                    await _notify_popular(game, hit, settings)
+                await asyncio.sleep(0.35)
+        payload["at"] = dt.datetime.now().isoformat(timespec="seconds")
+        payload["hits"] = hits
+        status["popular"][game] = payload
+        return popular_status(game)
+    except Exception as e:
+        status["errors"]["popular"] = f"{type(e).__name__}: {e}"[:200]
+        payload["error"] = status["errors"]["popular"]
+        status["popular"][game] = payload
+        return popular_status(game)
+    finally:
+        status["popular_running"] = False
+        status["popular_game"] = None
+
+
+POPULAR_COOLDOWN_H = 6
+
+
+async def _notify_popular(game: str, hit: dict, settings: dict) -> None:
+    now = dt.datetime.now()
+    with get_conn() as conn:
+        prev = conn.execute(
+            "SELECT last_notified_at FROM popular_hits WHERE game=? AND name=?",
+            (game, hit["name"]),
+        ).fetchone()
+    if prev and prev["last_notified_at"]:
+        try:
+            last = dt.datetime.fromisoformat(prev["last_notified_at"])
+            if (now - last).total_seconds() < POPULAR_COOLDOWN_H * 3600:
+                return
+        except ValueError:
+            pass
+    where = "listende yok" if not hit.get("in_list") else "listende var"
+    extra = ""
+    if hit.get("vs_steam"):
+        extra = f"\nSteam'e göre %{hit['vs_steam']:.0f} daha ucuz"
+    msg = (
+        f"🔥 Popüler fırsat (#{hit['rank']}) — {game.upper()}\n"
+        f"<b>{hit['name']}</b>\n"
+        f"En ucuz: {hit['low_label']} — {tl(hit['low'])} TL\n"
+        f"En pahalı: {hit['high_label']} — {tl(hit['high'])} TL\n"
+        f"Makas: <b>%{hit['spread_pct']:.1f}</b> ({tl(hit['diff'])} TL){extra}\n"
+        f"{where}"
+    )
+    await telegram.send_message(
+        settings.get("telegram_token", ""), settings.get("telegram_chat_id", ""), msg
+    )
+    with get_conn() as conn:
+        conn.execute(
+            "INSERT INTO popular_hits(game, name, last_notified_at) VALUES(?,?,?) "
+            "ON CONFLICT(game, name) DO UPDATE SET last_notified_at=excluded.last_notified_at",
+            (game, hit["name"], now.isoformat(timespec="seconds")),
+        )
+
+
+async def scan_popular_all(notify: bool = True) -> None:
+    settings = get_settings()
+    try:
+        limit = int(float(settings.get("popular_top_n") or 20))
+    except ValueError:
+        limit = 20
+    try:
+        min_spread = float(settings.get("popular_min_spread") or 8)
+    except ValueError:
+        min_spread = 8.0
+    for game in GAMES:
+        await scan_popular(game, limit, min_spread, notify=notify)
+
+
 async def opportunities(
-    min_spread_pct: float = 5.0,
+    min_spread_pct: float = 8.0,
     min_discount_pct: float = 15.0,
     min_price_try: float = 50.0,
-    limit: int = 40,
+    limit: int = 20,
     game: str = "cs2",
 ) -> dict:
-    labels = source_labels(game)
-    spreads = []
-    with get_conn() as conn:
-        items = conn.execute(
-            "SELECT * FROM items WHERE game=? ORDER BY id", (game,)
-        ).fetchall()
-    for item in items:
-        prices = latest_prices(item["id"])
-        sp = spread_info(prices)
-        if not sp or sp["spread_pct"] < min_spread_pct:
-            continue
-        spreads.append({
-            "item_id": item["id"],
-            "name": item["name"],
-            "low_source": sp["low_source"],
-            "low_label": labels.get(sp["low_source"], sp["low_source"]),
-            "low": sp["low"],
-            "low_url": prices.get(sp["low_source"], {}).get("url"),
-            "high_source": sp["high_source"],
-            "high_label": labels.get(sp["high_source"], sp["high_source"]),
-            "high": sp["high"],
-            "high_url": prices.get(sp["high_source"], {}).get("url"),
-            "spread_pct": sp["spread_pct"],
-            "diff": sp["high"] - sp["low"],
-        })
-    spreads.sort(key=lambda x: x["spread_pct"], reverse=True)
-
-    discounts = []
-    if game == "cs2":
-        try:
-            async with httpx.AsyncClient(follow_redirects=True) as client:
-                catalog = await skinport._get_items(client, app_id=CS2_APP_ID)
-            for name, it in catalog.items():
-                mp = it.get("min_price")
-                sug = it.get("suggested_price")
-                qty = it.get("quantity") or 0
-                if not mp or not sug or qty <= 0 or mp < min_price_try:
-                    continue
-                pct = (sug - mp) / sug * 100
-                if pct < min_discount_pct:
-                    continue
-                discounts.append({
-                    "name": name,
-                    "price": mp,
-                    "suggested": sug,
-                    "discount_pct": pct,
-                    "quantity": qty,
-                    "url": it.get("item_page"),
-                })
-            discounts.sort(key=lambda x: x["discount_pct"], reverse=True)
-            discounts = discounts[:limit]
-        except Exception as e:
-            status["errors"]["opportunities"] = f"{type(e).__name__}: {e}"[:200]
-
-    return {"spreads": spreads[:limit], "discounts": discounts}
+    """Eski uç: son popüler tarama sonucunu döner."""
+    return popular_status(game)
 
 
 async def check_alerts(item, settings: dict):
@@ -531,6 +665,10 @@ async def scheduler_loop():
             await snapshot_catalogs()
         except Exception as e:
             status["errors"]["catalog_snapshot"] = f"{type(e).__name__}: {e}"[:300]
+        try:
+            await scan_popular_all(notify=True)
+        except Exception as e:
+            status["errors"]["popular"] = f"{type(e).__name__}: {e}"[:300]
         try:
             interval = max(1, int(float(get_settings().get("check_interval_min", "5"))))
         except ValueError:

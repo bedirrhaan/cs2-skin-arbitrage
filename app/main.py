@@ -66,6 +66,8 @@ class SettingsIn(BaseModel):
     enabled_sources_cs2: Optional[str] = None
     enabled_sources_rust: Optional[str] = None
     enabled_sources_ko: Optional[str] = None
+    popular_top_n: Optional[str] = None
+    popular_min_spread: Optional[str] = None
 
 
 class AlertIn(BaseModel):
@@ -197,18 +199,38 @@ async def telegram_test():
     return {"ok": True}
 
 
+class PopularScanIn(BaseModel):
+    game: str = "cs2"
+    limit: int = 20
+    min_spread: float = 8.0
+    notify: bool = True
+
+
 # ---------- fırsatlar ----------
 
 @app.get("/api/opportunities")
 async def get_opportunities(
-    min_spread: float = 5.0,
+    min_spread: float = 8.0,
     min_discount: float = 15.0,
     game: str = "cs2",
+    limit: int = 20,
 ):
     if game not in GAMES:
         raise HTTPException(400, "geçersiz oyun")
-    return await engine.opportunities(
-        min_spread_pct=min_spread, min_discount_pct=min_discount, game=game
+    return engine.popular_status(game)
+
+
+@app.post("/api/opportunities/scan")
+async def scan_opportunities(body: PopularScanIn):
+    if body.game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    limit = body.limit if body.limit in (5, 10, 15, 20, 25) else 20
+    set_settings({
+        "popular_top_n": str(limit),
+        "popular_min_spread": str(body.min_spread),
+    })
+    return await engine.start_popular_scan(
+        body.game, limit, body.min_spread, notify=body.notify
     )
 
 
