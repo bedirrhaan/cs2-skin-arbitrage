@@ -478,6 +478,24 @@ async def _live_prices(client, name: str, settings: dict, game: str) -> dict:
     return out
 
 
+async def live_price_payload(name: str, game: str) -> dict:
+    settings = get_settings()
+    try:
+        min_pct = float(settings.get("popular_min_spread") or 8)
+    except ValueError:
+        min_pct = 8.0
+    async with httpx.AsyncClient(follow_redirects=True, timeout=SOURCE_TIMEOUT) as client:
+        prices = await _live_prices(client, name, settings, game)
+    return {
+        "sources": source_labels(game),
+        "prices": prices,
+        "spread": spread_info(prices),
+        "deal": judge_deal(game, name, prices, min_pct),
+        "name": name,
+        "game": game,
+    }
+
+
 def popular_status(game: str) -> dict:
     d = dict(status.get("popular", {}).get(game) or {
         "hits": [], "scanned": [], "progress": 0, "total": 0, "limit": 20,

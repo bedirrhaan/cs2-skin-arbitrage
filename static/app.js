@@ -91,6 +91,7 @@ let chartSpan = "1h";
 let chartFrom = "listele";
 let priceChart = null;
 let chartInDepo = false;
+let chartMarketGen = 0;
 let TAKIP_NAMES = new Set();
 
 const HUB_COPY = {
@@ -290,7 +291,10 @@ async function openChart(name, from) {
   const dealBox = document.getElementById("chartDeal");
   if (dealBox) { dealBox.style.display = "none"; dealBox.innerHTML = ""; }
   document.querySelectorAll(".span-btn[data-span]").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
-  await renderChart();
+  ensureSources();
+  const box = document.getElementById("chartMarkets");
+  if (box) box.innerHTML = priceGridHtml(null, true);
+  renderChart();
   loadChartMarkets(name);
 }
 
@@ -418,7 +422,8 @@ async function renderChart() {
         },
       },
     });
-    ctx.parentElement.style.height = "360px";
+    const wrap = ctx.closest(".chart-canvas-wrap") || ctx.parentElement;
+    wrap.style.height = "360px";
   } catch (e) {
     empty.style.display = "";
     empty.textContent = e.message;
@@ -451,10 +456,33 @@ function renderCurrent() {
   grid.innerHTML = renderItem(it);
 }
 
+const DEFAULT_SOURCES = {
+  cs2: {
+    steam: "Steam Market", skinport: "Skinport", dmarket: "DMarket", bitskins: "Bitskins",
+    kopazar: "Kopazar", gamesatis: "GameSatis", bynogame: "ByNoGame", csfloat: "CSFloat",
+    itemsatis: "İtemSatış", itemci: "Itemci",
+  },
+  rust: {
+    skinport: "Skinport", dmarket: "DMarket", rust_tm: "rust.tm", bynogame: "ByNoGame",
+    waxpeer: "Waxpeer", steam: "Steam Market", bitskins: "Bitskins", gamesatis: "GameSatis",
+  },
+  ko: { kopazar: "Kopazar", bynogame: "ByNoGame" },
+};
+
+function ensureSources() {
+  const fallback = DEFAULT_SOURCES[currentGame] || DEFAULT_SOURCES.cs2;
+  if (!SOURCES || !Object.keys(SOURCES).length) {
+    SOURCES = { ...fallback };
+    return;
+  }
+  SOURCES = { ...fallback, ...SOURCES };
+}
+
 function enabledSourcesList() {
+  ensureSources();
   const ui = GAME_UI[currentGame] || GAME_UI.cs2;
-  const key = ui.settingsKey;
-  return (SETTINGS[key] || SETTINGS.enabled_sources || Object.keys(SOURCES).join(",")).split(",");
+  const raw = SETTINGS[ui.settingsKey] || SETTINGS.enabled_sources || Object.keys(SOURCES).join(",");
+  return raw.split(",").map((s) => s.trim()).filter((s) => s && SOURCES[s]);
 }
 
 function shortPriceError(msg) {
@@ -522,30 +550,35 @@ function priceGridHtml(it, scanning) {
   return `<div class="price-row" style="--n:${enabled.length}">${cells}</div>`;
 }
 
+function paintDealBox(x) {
+  const el = document.getElementById("chartDeal");
+  if (!el) return;
+  if (!x) {
+    el.className = "chart-deal none";
+    el.style.display = "";
+    el.innerHTML = "Referans (Steam + 1 haftalık satış) ile siteler karşılaştırıldı — şu an eşiği aşan fırsat yok.";
+    return;
+  }
+  el.className = "chart-deal";
+  el.style.display = "";
+  const refs = [];
+  if (x.steam != null) refs.push(`Steam <b>${fmtTL(x.steam)}</b>`);
+  if (x.week_avg != null)
+    refs.push(`1 hafta ort. ${esc(x.week_label || "")} <b>${fmtTL(x.week_avg)}</b> (${x.week_n} satış)`);
+  const why = [];
+  if (x.vs_steam) why.push(`Steam’e göre %${x.vs_steam}`);
+  if (x.vs_hist) why.push(`haftalık satışa göre %${x.vs_hist}`);
+  el.innerHTML = `Fırsat: şu an <b>${esc(x.low_label)}</b> ${fmtTL(x.low)}`
+    + (refs.length ? `<br>Referans: ${refs.join(" · ")}` : "")
+    + (why.length ? ` — ${why.join(", ")} daha ucuz.` : ".");
+}
+
 async function paintChartDeal(name) {
   const el = document.getElementById("chartDeal");
   if (!el || !name) return;
   try {
     const d = await api(`/api/deals?game=${currentGame}&name=${encodeURIComponent(name)}`);
-    const x = d.deal;
-    if (!x) {
-      el.className = "chart-deal none";
-      el.style.display = "";
-      el.innerHTML = "Referans (Steam + 1 haftalık satış) ile siteler karşılaştırıldı — şu an eşiği aşan fırsat yok.";
-      return;
-    }
-    el.className = "chart-deal";
-    el.style.display = "";
-    const refs = [];
-    if (x.steam != null) refs.push(`Steam <b>${fmtTL(x.steam)}</b>`);
-    if (x.week_avg != null)
-      refs.push(`1 hafta ort. ${esc(x.week_label || "")} <b>${fmtTL(x.week_avg)}</b> (${x.week_n} satış)`);
-    const why = [];
-    if (x.vs_steam) why.push(`Steam’e göre %${x.vs_steam}`);
-    if (x.vs_hist) why.push(`haftalık satışa göre %${x.vs_hist}`);
-    el.innerHTML = `Fırsat: şu an <b>${esc(x.low_label)}</b> ${fmtTL(x.low)}`
-      + (refs.length ? `<br>Referans: ${refs.join(" · ")}` : "")
-      + (why.length ? ` — ${why.join(", ")} daha ucuz.` : ".");
+    paintDealBox(d.deal);
   } catch {
     el.style.display = "none";
   }
@@ -554,29 +587,18 @@ async function loadChartMarkets(name) {
   const box = document.getElementById("chartMarkets");
   if (!box) return;
   const gen = ++chartMarketGen;
-  box.innerHTML = `<p class="hint">Siteler taranıyor…</p>`;
+  ensureSources();
+  box.innerHTML = priceGridHtml(null, true);
   try {
-    await api("/api/items", {
+    const d = await api("/api/live-prices", {
       method: "POST",
-      body: JSON.stringify({ names: name, game: currentGame }),
+      body: JSON.stringify({ query: name, game: currentGame }),
     });
-    let data = await api(`/api/items?game=${currentGame}`);
     if (gen !== chartMarketGen) return;
-    SOURCES = data.sources;
-    ITEMS = data.items;
-    let it = data.items.find((i) => i.name === name);
-    box.innerHTML = priceGridHtml(it, true);
-    if (it) {
-      await api(`/api/items/${it.id}/refresh`, { method: "POST" });
-      if (gen !== chartMarketGen) return;
-      data = await api(`/api/items?game=${currentGame}`);
-      SOURCES = data.sources;
-      ITEMS = data.items;
-      it = data.items.find((i) => i.name === name);
-    }
-    if (gen !== chartMarketGen) return;
-    box.innerHTML = priceGridHtml(it, false);
-    await paintChartDeal(name);
+    if (d.sources && Object.keys(d.sources).length) SOURCES = d.sources;
+    else ensureSources();
+    box.innerHTML = priceGridHtml({ prices: d.prices, spread: d.spread }, false);
+    paintDealBox(d.deal);
   } catch (e) {
     if (gen !== chartMarketGen) return;
     box.innerHTML = `<p class="hint">${esc(e.message)}</p>`;

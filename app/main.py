@@ -255,6 +255,16 @@ def get_deal(game: str = "cs2", name: str = "", min_spread: float = 0):
     return {"deal": deal, "ok": True}
 
 
+@app.post("/api/live-prices")
+async def live_prices(body: ResolveIn):
+    """Katalog grafiği altı — item listesine eklemeden canlı fiyat."""
+    q = body.query.strip()
+    if not q:
+        raise HTTPException(400, "isim gerekli")
+    game = body.game if body.game in GAMES else "cs2"
+    return await engine.live_price_payload(q, game)
+
+
 # ---------- döngü ----------
 
 @app.post("/api/items/{item_id}/refresh")

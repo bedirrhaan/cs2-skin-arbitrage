@@ -207,8 +207,10 @@ body.sidebar-open .app-sidebar {
 .span-btn.on { background: #2563eb; color: #fff; border-color: transparent; }
 .chart-box {
   background: #0b0d14; border-radius: 16px; padding: 16px;
-  border: 1px solid rgba(255,255,255,.06); min-height: 320px;
+  border: 1px solid rgba(255,255,255,.06);
 }
+.chart-canvas-wrap { height: 360px; position: relative; }
+.chart-empty { color: #8b93a7; font-size: 13px; margin: 8px 0 0; }
 .chart-stats { color: #5a5470; font-size: 14px; font-weight: 650; margin: 0 0 12px; }
 .chart-deal {
   margin: 0 0 12px;
@@ -226,14 +228,15 @@ body.sidebar-open .app-sidebar {
   border-color: rgba(95, 107, 179, 0.2);
 }
 .chart-deal b { font-weight: 800; }
-.chart-markets { margin-top: 16px; }
+.chart-markets { margin-top: 20px; min-height: 140px; }
 .chart-markets-title {
+  font-family: -apple-system, "Segoe UI", Roboto, sans-serif !important;
   font-size: 13px;
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--ink-soft);
-  margin: 0 0 8px;
+  margin: 0 0 10px;
 }
 
 @media (max-width: 980px) {
