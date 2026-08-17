@@ -119,10 +119,10 @@ async def _search_ko_products(
     return body.get("data", {}).get("result") or []
 
 
-async def _ko_min_listing_price(
+async def _ko_listings(
     client: httpx.AsyncClient,
     product_id: int,
-) -> float | None:
+) -> list[dict]:
     url = (
         f"{KO_LISTINGS_API}?page=1&limit=1000&sort=Price:1"
         f"&filters=Product:{product_id};OnlyInStock:true"
@@ -131,10 +131,77 @@ async def _ko_min_listing_price(
     r.raise_for_status()
     body = r.json()
     if not body.get("success"):
-        return None
-    listings = body.get("data", {}).get("result") or []
+        return []
+    return body.get("data", {}).get("result") or []
+
+
+async def _ko_min_listing_price(
+    client: httpx.AsyncClient,
+    product_id: int,
+) -> float | None:
+    listings = await _ko_listings(client, product_id)
     prices = [float(it["price"]) for it in listings if it.get("price")]
     return min(prices) if prices else None
+
+
+def _ko_listing_ts(it: dict):
+    import datetime as dt
+    raw = (
+        it.get("createdAt") or it.get("created_at") or it.get("updatedAt")
+        or it.get("updated_at") or it.get("date")
+    )
+    if not raw:
+        return dt.datetime.utcnow().replace(microsecond=0)
+    s = str(raw).replace("Z", "").split(".")[0]
+    try:
+        return dt.datetime.fromisoformat(s)
+    except ValueError:
+        return dt.datetime.utcnow().replace(microsecond=0)
+
+
+async def ko_price_points(
+    client: httpx.AsyncClient,
+    name: str,
+) -> list[tuple[str, float]]:
+    """KO ürününün ByNoGame ilan fiyatları (tarihli, yoksa güncel min)."""
+    from ..ko_item import parse_ko_item, bng_name_matches
+    parsed = parse_ko_item(name)
+    seen_ids: set[int] = set()
+    points: list[tuple[str, float]] = []
+    now = __import__("datetime").datetime.utcnow().replace(microsecond=0).isoformat()
+    for qn in (parsed.base_name, parsed.keyword, name):
+        if not qn:
+            continue
+        for item in await _search_ko_products(client, qn):
+            title = item.get("displayName") or item.get("displayNameShort") or item.get("name") or ""
+            if not bng_name_matches(parsed, title):
+                continue
+            pid = item.get("id")
+            if pid is None or int(pid) in seen_ids:
+                continue
+            seen_ids.add(int(pid))
+            listings = await _ko_listings(client, int(pid))
+            priced = []
+            for it in listings:
+                try:
+                    p = float(it["price"])
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if p <= 0:
+                    continue
+                ts = _ko_listing_ts(it).replace(microsecond=0).isoformat()
+                priced.append((ts, round(p, 2)))
+            if priced:
+                points.extend(priced)
+                continue
+            pmin = item.get("priceMin") or item.get("price")
+            try:
+                val = float(pmin) if pmin else None
+            except (TypeError, ValueError):
+                val = None
+            if val and val > 0:
+                points.append((now, round(val, 2)))
+    return points
 
 
 async def fetch_ko(client: httpx.AsyncClient, parsed) -> PriceResult:

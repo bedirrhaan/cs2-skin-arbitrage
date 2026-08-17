@@ -264,22 +264,24 @@ async def api_history(game: str = "cs2", name: str = "", span: str = "1h"):
     if span not in ("1h", "1d", "1w", "1m"):
         span = "1h"
     nm = name.strip()
-    if game in ("cs2", "rust"):
-        try:
-            await ensure_market_history(game, nm, span)
-        except Exception:
-            pass
+    try:
+        await ensure_market_history(game, nm, span)
+    except Exception:
+        pass
     data = history_series(game, nm, span)
-    if not data.get("points") and game in ("cs2", "rust"):
+    if not data.get("points"):
         try:
             cat = await list_catalog(game, q=nm, offset=0, limit=20)
             hit = next((x for x in cat.get("items") or [] if x.get("name") == nm), None)
             if hit and hit.get("price_try") is not None:
-                record_history(game, nm, "skinport", hit["price_try"])
+                src = "bynogame" if game == "ko" else "skinport"
+                record_history(game, nm, src, hit["price_try"])
                 data = history_series(game, nm, span)
         except Exception:
             pass
     data["in_depo"] = depo_has(game, nm)
+    if "chart_label" not in data:
+        data["chart_label"] = "Pazar fiyat" if game == "ko" else "Steam fiyat"
     return data
 
 

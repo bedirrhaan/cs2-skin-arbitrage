@@ -333,12 +333,12 @@ async function renderChart() {
         const sign = (d.change_pct || 0) >= 0 ? "+" : "";
         stats.textContent = `${fmtChartLabel(d.from_t, chartSpan)} ${fmtTL(d.first)}  →  ${fmtChartLabel(d.to_t, chartSpan)} ${fmtTL(d.latest)}  (${sign}${d.change_pct}%)`;
       } else {
-        stats.textContent = pts.length ? "Tek kayıt var — Steam geçmişi henüz gelmedi." : "";
+        stats.textContent = pts.length ? "Tek kayıt var — daha eski geçmiş henüz yok." : "";
       }
     }
     if (!pts.length) {
       empty.style.display = "";
-      empty.textContent = "Bu item için Steam fiyat geçmişi bulunamadı.";
+      empty.textContent = "Bu item için fiyat geçmişi bulunamadı.";
       if (priceChart) { priceChart.destroy(); priceChart = null; }
       return;
     }
@@ -359,7 +359,7 @@ async function renderChart() {
         labels,
         datasets: [
           {
-            label: "Steam fiyat",
+            label: d.chart_label || (currentGame === "ko" ? "Pazar fiyat" : "Steam fiyat"),
             data: series,
             borderColor: up ? "#a2d12d" : "#e85d5d",
             backgroundColor: up ? "rgba(162,209,45,.12)" : "rgba(232,93,93,.12)",

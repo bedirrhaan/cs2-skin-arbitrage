@@ -263,6 +263,17 @@ SPAN_WINDOWS = {
 }
 
 
+def _spec_for(game: str, span: str) -> dict:
+    spec = dict(SPAN_WINDOWS.get(span, SPAN_WINDOWS["1d"]))
+    if game == "ko":
+        spec["sources"] = ("bynogame", "kopazar")
+    elif game == "rust":
+        spec["sources"] = tuple(dict.fromkeys(
+            ("steam", "steam_hourly") + spec["sources"]
+        ))
+    return spec
+
+
 def _pct(now_p, old_p) -> float | None:
     if now_p is None or old_p is None or old_p <= 0:
         return None
@@ -548,13 +559,49 @@ def _coverage_ok(game: str, name: str, spec: dict) -> bool:
     return first <= now - spec["delta"] + slack
 
 
+async def ensure_ko_history(name: str) -> None:
+    from .sources.bynogame import ko_price_points
+    from .sources.kopazar import search_ko_listings
+    from .ko_item import parse_ko_item, ko_listing_matches
+    from .sources.base import USER_AGENT
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=40, headers={"User-Agent": USER_AGENT}) as client:
+        bng = []
+        try:
+            bng = await ko_price_points(client, name)
+        except Exception:
+            bng = []
+        kop = []
+        try:
+            parsed = parse_ko_item(name)
+            now = dt.datetime.utcnow().replace(microsecond=0).isoformat()
+            for row in await search_ko_listings(client, parsed):
+                if row.get("price") and ko_listing_matches(parsed, row.get("title") or ""):
+                    kop.append((now, round(float(row["price"]), 2)))
+        except Exception:
+            kop = []
+    if len(bng) >= 1:
+        await asyncio.to_thread(replace_priced_history, "ko", name, "bynogame", bng)
+    if kop:
+        cheap = min(p for _, p in kop)
+        await asyncio.to_thread(replace_priced_history, "ko", name, "kopazar", [(kop[0][0], cheap)])
+
+
 async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
-    """Steam geçmişini çekip SQLite'a yazar — grafik 'eski vs şimdi' için."""
-    if game not in ("cs2", "rust"):
+    """Piyasa geçmişini çekip SQLite'a yazar — grafik için."""
+    if game not in ("cs2", "rust", "ko"):
         return
-    spec = SPAN_WINDOWS.get(span, SPAN_WINDOWS["1d"])
+    spec = _spec_for(game, span)
     key = (game, name, span)
     if key in _hist_fetched or _coverage_ok(game, name, spec):
+        _hist_fetched.add(key)
+        return
+
+    if game == "ko":
+        try:
+            await ensure_ko_history(name)
+        except Exception:
+            pass
         _hist_fetched.add(key)
         return
 
@@ -564,6 +611,7 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
     start = (now - dt.timedelta(days=days)).strftime("%Y-%m-%d")
     end = now.strftime("%Y-%m-%d")
     from .sources.base import USER_AGENT
+    from .sources.steam_market import CS2_APP, RUST_APP, fetch_price_history
     try_rate = await fx.to_try(1.0, "USD") or 41.0
     best: list[tuple] = []
     best_source = "steam_hourly" if interval == "hourly" else "steam"
@@ -610,6 +658,17 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
                     break
             except Exception:
                 continue
+        if len(best) < spec["min_buckets"]:
+            try:
+                app_id = RUST_APP if game == "rust" else CS2_APP
+                steam_rows = await fetch_price_history(
+                    client, app_id=app_id, name=name, try_rate=try_rate
+                )
+                if len(steam_rows) > len(best):
+                    best = steam_rows
+                    best_source = "steam_hourly" if interval == "hourly" else "steam"
+            except Exception:
+                pass
     if len(best) >= 2:
         await asyncio.to_thread(replace_priced_history, game, name, best_source, best)
     _hist_fetched.add(key)
@@ -617,7 +676,7 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
 
 def history_series(game: str, name: str, span: str = "1d") -> dict:
     """span: 1h saatlik | 1d günlük | 1w haftalık | 1m aylık"""
-    spec = SPAN_WINDOWS.get(span, SPAN_WINDOWS["1d"])
+    spec = _spec_for(game, span)
     now = dt.datetime.now()
     since = (now - spec["delta"]).isoformat(timespec="seconds")
     bucket = spec["bucket"]
@@ -631,6 +690,15 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
             rows = part
     if not rows:
         rows = _history_rows(game, name, spec["sources"], since)
+    if not rows:
+        placeholders = "?,?"
+        with get_conn() as conn:
+            rows = conn.execute(
+                """SELECT captured_at, price_try FROM price_history
+                   WHERE game=? AND name=? AND price_try IS NOT NULL AND captured_at>=?
+                   ORDER BY captured_at""",
+                (game, name, since),
+            ).fetchall()
     series = _series_from_rows(rows, bucket)
     latest = series[-1]["v"] if series else None
     first = series[0]["v"] if series else None
@@ -650,6 +718,7 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
         "change_pct": change_pct,
         "from_t": series[0]["t"] if series else None,
         "to_t": series[-1]["t"] if series else None,
+        "chart_label": "Pazar fiyat" if game == "ko" else "Steam fiyat",
     }
 
 
