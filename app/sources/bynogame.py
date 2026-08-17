@@ -10,7 +10,7 @@ import httpx
 
 from ..itemname import ParsedItem, listing_matches_parsed
 from ..ko_item import bng_name_matches
-from .base import PriceResult, USER_AGENT, attach_top_offers
+from .base import PriceResult, USER_AGENT, attach_top_offers, short_error
 API = "https://gw.bynogame.com/steam-products/v2/products"
 KO_PRODUCTS_API = "https://gw.bynogame.com/knight-items/v2/products"
 KO_LISTINGS_API = "https://gw.bynogame.com/knight-item-listings/v2/listings"
@@ -87,7 +87,11 @@ async def _fetch(
         pid = match.get("id")
         offers = []
         if pid is not None:
-            for L in await _steam_listings(client, int(pid)):
+            try:
+                listings = await _steam_listings(client, int(pid))
+            except Exception:
+                listings = []
+            for L in listings:
                 try:
                     p = float(L.get("price") or 0)
                 except (TypeError, ValueError):
@@ -111,7 +115,7 @@ async def _fetch(
             res.price = float(price)
             attach_top_offers(res, [(float(price), res.url)])
     except Exception as e:
-        res.error = f"{type(e).__name__}: {e}"[:200]
+        res.error = short_error(e)
     return res
 
 
@@ -120,7 +124,7 @@ async def _steam_listings(client: httpx.AsyncClient, product_id: int) -> list[di
         f"{STEAM_LISTINGS_API}?page=1&limit=20&sort=Price:1"
         f"&filters=Product:{product_id};OnlyInStock:true"
     )
-    r = await client.get(url, headers=_HEADERS, timeout=30)
+    r = await client.get(url, headers=_HEADERS, timeout=8)
     r.raise_for_status()
     body = r.json()
     if not body.get("success"):
@@ -320,7 +324,7 @@ async def fetch_ko(client: httpx.AsyncClient, parsed) -> PriceResult:
             return res
         attach_top_offers(res, offers)
     except Exception as e:
-        res.error = f"{type(e).__name__}: {e}"[:200]
+        res.error = short_error(e)
         res.url = search_url
     return res
 

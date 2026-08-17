@@ -18,6 +18,30 @@ class PriceResult:
     offers: list | None = None  # [{price, url}] en ucuz 3 ilan
 
 
+def short_error(exc: BaseException) -> str:
+    """Kartta taşmayacak kısa hata — URL ve uzun httpx metni yok."""
+    try:
+        import httpx
+        if isinstance(exc, httpx.HTTPStatusError) and exc.response is not None:
+            code = exc.response.status_code
+            if code == 429:
+                return "istek limiti doldu — biraz sonra dene"
+            if code == 403:
+                return "erişim reddedildi"
+            if code == 404:
+                return "bulunamadı"
+            return f"HTTP {code}"
+        if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+            return "zaman aşımı — site yavaş yanıt verdi"
+    except Exception:
+        pass
+    msg = str(exc).split(" for url ", 1)[0].strip()
+    msg = msg.replace("Client error ", "").replace("Server error ", "")
+    if len(msg) > 72:
+        msg = msg[:70] + "…"
+    return msg or type(exc).__name__
+
+
 def attach_top_offers(res: PriceResult, rows: list, n: int = 3) -> None:
     """rows: (price, url) — en ucuz n ilanı res.offers'a yazar."""
     clean = []

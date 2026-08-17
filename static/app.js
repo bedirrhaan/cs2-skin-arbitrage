@@ -459,6 +459,20 @@ function enabledSourcesList() {
   return (SETTINGS[key] || SETTINGS.enabled_sources || Object.keys(SOURCES).join(",")).split(",");
 }
 
+function shortPriceError(msg) {
+  const s = String(msg || "").replace(/\s+/g, " ").trim();
+  if (!s) return "veri yok";
+  if (/429|Too Many Requests/i.test(s)) return "istek limiti doldu — biraz sonra dene";
+  if (/403|Forbidden/i.test(s)) return "erişim reddedildi";
+  if (/404|Not Found/i.test(s)) return "bulunamadı";
+  if (/zaman aşımı|Timeout/i.test(s)) return "zaman aşımı — site yavaş yanıt verdi";
+  const http = s.match(/\b([45]\d\d)\b/);
+  if (/HTTPStatusError|Client error|Server error|HTTP /i.test(s) && http) return `HTTP ${http[1]}`;
+  const noUrl = s.replace(/https?:\/\/\S+/gi, "").replace(/\s+/g, " ").trim();
+  const out = noUrl || "bağlantı hatası";
+  return out.length > 72 ? out.slice(0, 70) + "…" : out;
+}
+
 function listingOffers(p) {
   const raw = (p && p.offers) || [];
   const rows = raw
@@ -498,7 +512,7 @@ function renderItem(it) {
     const label = SOURCES[src];
     if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${scanning ? "taranıyor…" : "henüz veri yok"}</div></div>`;
     if (p.error || p.price_try == null)
-      return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${esc(p.error || "veri yok")}</div></div>`;
+      return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${esc(shortPriceError(p.error || "veri yok"))}</div></div>`;
     const cls = it.spread
       ? src === it.spread.low_source ? "low" : src === it.spread.high_source ? "high" : ""
       : "";

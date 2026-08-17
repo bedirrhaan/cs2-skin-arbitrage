@@ -12,7 +12,7 @@ import httpx
 
 from .. import catalog_cache as cache
 from ..itemname import ParsedItem, pick_catalog_row
-from .base import PriceResult
+from .base import PriceResult, attach_top_offers
 
 CACHE_KEY = "csfloat:cs2"
 TTL = 300
@@ -74,6 +74,7 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
             "https://csfloat.com/search?market_hash_name="
             + quote(name or parsed.full_name)
         )
+        attach_top_offers(res, [(res.price, res.url)])
     except httpx.HTTPStatusError:
         res.error = "CSFloat istek limiti — birkaç dakika sonra tekrar dene"
     except Exception as e:

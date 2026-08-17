@@ -12,7 +12,7 @@ import httpx
 from bs4 import BeautifulSoup
 
 from ..itemname import ParsedItem, WEAR_TR, listing_contains_skin, norm, norm_listing
-from .base import PriceResult, USER_AGENT
+from .base import PriceResult, USER_AGENT, attach_top_offers
 
 BASE = "https://itemci.com"
 
@@ -83,8 +83,9 @@ async def fetch(client: httpx.AsyncClient, parsed: ParsedItem) -> PriceResult:
         if not candidates:
             res.error = "ilan bulunamadı"
             return res
-        res.price, listing_url = min(candidates, key=lambda x: x[0])
-        res.url = listing_url or url
+        attach_top_offers(res, candidates)
+        if not res.url:
+            res.url = url
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res

@@ -11,11 +11,12 @@ from .db import enabled_sources_for, get_conn, get_settings
 from .games import GAMES
 from .itemname import cs2_wear_variants, norm, parse_item_name
 from .sources import skinport
+from .sources.base import PriceResult, short_error
 from .sources.skinport import CS2_APP_ID, RUST_APP_ID
 
 status: dict = {"last_run": None, "running": False, "errors": {}, "next_run": None}
 
-SOURCE_TIMEOUT = 16.0
+SOURCE_TIMEOUT = 22.0
 
 
 def source_labels(game: str = "cs2") -> dict:
@@ -51,13 +52,12 @@ def _price_tasks(client, name: str, settings: dict, game: str):
 
 
 async def _run_source(key: str, coro):
-    from .sources.base import PriceResult
     try:
         return await asyncio.wait_for(coro, SOURCE_TIMEOUT)
     except asyncio.TimeoutError:
         return PriceResult(source=key, error="zaman aşımı — site yavaş yanıt verdi")
     except Exception as e:
-        return PriceResult(source=key, error=f"{type(e).__name__}: {e}"[:200])
+        return PriceResult(source=key, error=short_error(e))
 
 
 async def iter_item_prices(client, name: str, settings: dict, game: str = "cs2"):

@@ -12,7 +12,7 @@ from urllib.parse import quote
 import httpx
 from bs4 import BeautifulSoup
 from ..itemname import ParsedItem, listing_contains_skin, norm, norm_listing, WEAR_SLUGS
-from .base import PriceResult, USER_AGENT
+from .base import PriceResult, USER_AGENT, attach_top_offers
 
 BASE = "https://www.gamesatis.com"
 CS2_PATH = "/cs2-skin"
@@ -45,8 +45,7 @@ async def _fetch_path(
 
         target = norm(parsed.base_name)
         wear_slug = WEAR_SLUGS.get(parsed.wear) if parsed.wear else None
-        prices = []
-        listing_url = url
+        candidates: list[tuple[float, str]] = []
         for a in soup.select("a.product.product-skin, a.product-skin, .product.product-skin"):
             name_el = a.select_one(".product-name")
             price_el = a.select_one(".selling-price")
@@ -62,17 +61,18 @@ async def _fetch_path(
             if wear_slug and href and wear_slug not in href:
                 continue
             p = _parse_price(price_el.get_text(" ", strip=True))
-            if p:
-                prices.append(p)
-                if href:
-                    listing_url = href if href.startswith("http") else BASE + href
+            if not p:
+                continue
+            listing_url = url
+            if href:
+                listing_url = href if href.startswith("http") else BASE + href
+            candidates.append((p, listing_url))
 
-        if not prices:
+        if not candidates:
             res.error = "ilan bulunamadı"
             res.url = url
             return res
-        res.price = min(prices)
-        res.url = listing_url
+        attach_top_offers(res, candidates)
     except Exception as e:
         res.error = f"{type(e).__name__}: {e}"[:200]
     return res

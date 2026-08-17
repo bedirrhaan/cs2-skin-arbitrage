@@ -11,7 +11,7 @@ from urllib.parse import quote
 import httpx
 
 from ..itemname import ParsedItem
-from .base import PriceResult, USER_AGENT
+from .base import PriceResult, USER_AGENT, short_error
 
 CS2_APP = 730
 RUST_APP = 252490
@@ -69,7 +69,7 @@ async def _fetch(client: httpx.AsyncClient, parsed: ParsedItem, app_id: int) -> 
             f"{app_id}/{quote(name)}"
         )
     except Exception as e:
-        res.error = f"{type(e).__name__}: {e}"[:200]
+        res.error = short_error(e)
     return res
 
 

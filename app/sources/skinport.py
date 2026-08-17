@@ -12,7 +12,7 @@ import httpx
 
 from .. import catalog_cache as cache
 from ..itemname import ParsedItem, pick_catalog_row
-from .base import PriceResult
+from .base import PriceResult, attach_top_offers
 
 CS2_APP_ID = 730
 RUST_APP_ID = 252490
@@ -99,8 +99,11 @@ async def _fetch(
             res.error = "satışta yok"
             return res
         res.price = min_price
+        attach_top_offers(res, [(float(min_price), res.url)])
         if name and name != parsed.full_name:
             res.url = it.get("item_page")
+            if res.offers:
+                res.offers[0]["url"] = res.url
     except (httpx.HTTPStatusError, SkinportRateLimited):
         res.error = "Skinport istek limiti — birkaç dakika sonra tekrar dene"
     except Exception as e:

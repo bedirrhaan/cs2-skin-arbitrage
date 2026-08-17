@@ -319,7 +319,10 @@ def api_depo_del(depo_id: int):
 
 @app.get("/")
 def index():
-    return FileResponse(os.path.join(STATIC_DIR, "index.html"))
+    return FileResponse(
+        os.path.join(STATIC_DIR, "index.html"),
+        headers={"Cache-Control": "no-store, max-age=0"},
+    )
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
