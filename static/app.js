@@ -294,6 +294,7 @@ async function openChart(name, from) {
   document.getElementById("chartName").textContent = name;
   document.querySelectorAll(".span-btn").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
   await renderChart();
+  loadChartMarkets(name);
 }
 
 function setChartSpan(span) {
@@ -504,21 +505,62 @@ function renderOfferList(p) {
   }).join("");
 }
 
-function renderItem(it) {
+function priceGridHtml(it, scanning) {
   const enabled = enabledSourcesList().filter((s) => SOURCES[s]);
-  const scanning = currentItemId === it.id && window._priceScan;
+  if (!enabled.length) return `<p class="hint">Kaynak listesi yok.</p>`;
+  const prices = (it && it.prices) || {};
+  const spread = it && it.spread;
   const cells = enabled.map((src) => {
-    const p = it.prices[src];
+    const p = prices[src];
     const label = SOURCES[src];
     if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${scanning ? "taranıyor…" : "henüz veri yok"}</div></div>`;
     if (p.error || p.price_try == null)
       return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${esc(shortPriceError(p.error || "veri yok"))}</div></div>`;
-    const cls = it.spread
-      ? src === it.spread.low_source ? "low" : src === it.spread.high_source ? "high" : ""
+    const cls = spread
+      ? src === spread.low_source ? "low" : src === spread.high_source ? "high" : ""
       : "";
     const inner = `<div class="src">${label}</div><div class="offer-list">${renderOfferList(p)}</div>`;
     return `<div class="price-cell ${cls}">${inner}</div>`;
   }).join("");
+  return `<div class="price-row" style="--n:${enabled.length}">${cells}</div>`;
+}
+
+let chartMarketGen = 0;
+async function loadChartMarkets(name) {
+  const box = document.getElementById("chartMarkets");
+  if (!box) return;
+  const gen = ++chartMarketGen;
+  box.innerHTML = `<p class="hint">Siteler taranıyor…</p>`;
+  try {
+    await api("/api/items", {
+      method: "POST",
+      body: JSON.stringify({ names: name, game: currentGame }),
+    });
+    let data = await api(`/api/items?game=${currentGame}`);
+    if (gen !== chartMarketGen) return;
+    SOURCES = data.sources;
+    ITEMS = data.items;
+    let it = data.items.find((i) => i.name === name);
+    box.innerHTML = priceGridHtml(it, true);
+    if (it) {
+      await api(`/api/items/${it.id}/refresh`, { method: "POST" });
+      if (gen !== chartMarketGen) return;
+      data = await api(`/api/items?game=${currentGame}`);
+      SOURCES = data.sources;
+      ITEMS = data.items;
+      it = data.items.find((i) => i.name === name);
+    }
+    if (gen !== chartMarketGen) return;
+    box.innerHTML = priceGridHtml(it, false);
+  } catch (e) {
+    if (gen !== chartMarketGen) return;
+    box.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
+  }
+}
+
+function renderItem(it) {
+  const scanning = currentItemId === it.id && window._priceScan;
+  const grid = priceGridHtml(it, scanning);
 
   const spread = it.spread
     ? `<span class="spread-badge ${it.spread.spread_pct >= 10 ? "hot" : ""}">makas %${it.spread.spread_pct.toFixed(1)}</span>`
@@ -548,7 +590,7 @@ function renderItem(it) {
       <button class="btn btn-ghost btn-sm" onclick="toggleAlertForm(${it.id})">+ alarm</button>
       <button class="btn btn-danger btn-sm" onclick="deleteItem(${it.id}, '${esc(it.name).replace(/'/g, "\\'")}')">sil</button>
     </div>
-    <div class="price-row" style="--n:${enabled.length}">${cells}</div>
+    ${grid}
     <div class="alerts-box">${alerts}</div>
     <div class="alert-form" id="alertForm-${it.id}">
       <select id="alertKind-${it.id}" onchange="onKindChange(${it.id})">
