@@ -495,8 +495,8 @@ function renderOfferList(p) {
   if (!rows.length) return `<div class="val">${fmtTL(p.price_try)}</div><div class="orig">${fmtOrig(p)}</div>`;
   return rows.map((o) => {
     const gap = o.rank === 1
-      ? `<span class="offer-gap">en ucuz ilan</span>`
-      : `<span class="offer-gap">${o.rank - 1}. ilana göre <b>${fmtTL(o.diff_prev)}</b> fark</span>`;
+      ? `<span class="offer-gap">en ucuz</span>`
+      : `<span class="offer-gap">+${fmtTL(o.diff_prev)}</span>`;
     const body = `<span class="offer-rank">${o.rank}.</span><span class="offer-price">${fmtTL(o.price)}</span>${gap}`;
     return o.url
       ? `<a class="offer-line r${o.rank}" href="${esc(o.url)}" target="_blank" rel="noopener">${body}</a>`
@@ -505,9 +505,9 @@ function renderOfferList(p) {
 }
 
 function renderItem(it) {
-  const enabled = enabledSourcesList();
+  const enabled = enabledSourcesList().filter((s) => SOURCES[s]);
   const scanning = currentItemId === it.id && window._priceScan;
-  const cells = enabled.filter((s) => SOURCES[s]).map((src) => {
+  const cells = enabled.map((src) => {
     const p = it.prices[src];
     const label = SOURCES[src];
     if (!p) return `<div class="price-cell err"><div class="src">${label}</div><div class="val">${scanning ? "taranıyor…" : "henüz veri yok"}</div></div>`;
@@ -548,7 +548,7 @@ function renderItem(it) {
       <button class="btn btn-ghost btn-sm" onclick="toggleAlertForm(${it.id})">+ alarm</button>
       <button class="btn btn-danger btn-sm" onclick="deleteItem(${it.id}, '${esc(it.name).replace(/'/g, "\\'")}')">sil</button>
     </div>
-    <div class="price-row">${cells}</div>
+    <div class="price-row" style="--n:${enabled.length}">${cells}</div>
     <div class="alerts-box">${alerts}</div>
     <div class="alert-form" id="alertForm-${it.id}">
       <select id="alertKind-${it.id}" onchange="onKindChange(${it.id})">
