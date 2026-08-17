@@ -82,6 +82,7 @@ class AlertIn(BaseModel):
 def list_items(game: str = "cs2"):
     if game not in GAMES:
         raise HTTPException(400, "geçersiz oyun")
+    labels = {k: v["label"] for k, v in GAMES[game]["sources"].items()}
     with get_conn() as conn:
         items = conn.execute(
             "SELECT * FROM items WHERE game=? ORDER BY id", (game,)
@@ -99,6 +100,7 @@ def list_items(game: str = "cs2"):
             "name": it["name"],
             "prices": prices,
             "spread": engine.spread_info(prices),
+            "cheapest": engine.cheapest_three(prices, labels),
             "alerts": alerts_by_item.get(it["id"], []),
         })
     src = GAMES[game]["sources"]

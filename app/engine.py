@@ -329,6 +329,31 @@ def spread_info(prices: dict) -> dict | None:
     }
 
 
+def cheapest_three(prices: dict, labels: dict | None = None, n: int = 3) -> list[dict]:
+    """En ucuz n pazar; her sırada bir öncekine TL farkı."""
+    labels = labels or {}
+    ranked = []
+    for src, p in prices.items():
+        price = p.get("price_try")
+        if price is None:
+            continue
+        ranked.append({
+            "rank": 0,
+            "source": src,
+            "label": labels.get(src, src),
+            "price": float(price),
+            "url": p.get("url"),
+            "diff_prev": None,
+        })
+    ranked.sort(key=lambda x: x["price"])
+    ranked = ranked[:n]
+    for i, row in enumerate(ranked):
+        row["rank"] = i + 1
+        if i > 0:
+            row["diff_prev"] = round(row["price"] - ranked[i - 1]["price"], 2)
+    return ranked
+
+
 async def opportunities(
     min_spread_pct: float = 5.0,
     min_discount_pct: float = 15.0,
