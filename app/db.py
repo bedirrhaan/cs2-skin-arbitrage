@@ -111,10 +111,7 @@ def _migrate_items_game(conn: sqlite3.Connection):
     """)
 
 
-def _migrate_price_offers(conn: sqlite3.Connection):
-    cols = {r[1] for r in conn.execute("PRAGMA table_info(prices)").fetchall()}
-    if cols and "offers" not in cols:
-        conn.execute("ALTER TABLE prices ADD COLUMN offers TEXT")
+def _migrate_catalog_rank(conn: sqlite3.Connection):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(catalog_names)").fetchall()}
     if not cols:
         return
@@ -127,6 +124,12 @@ def _migrate_price_offers(conn: sqlite3.Connection):
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_catalog_rank ON catalog_names(game, rank_score DESC)"
     )
+
+
+def _migrate_price_offers(conn: sqlite3.Connection):
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(prices)").fetchall()}
+    if cols and "offers" not in cols:
+        conn.execute("ALTER TABLE prices ADD COLUMN offers TEXT")
 
 
 def _migrate_settings(conn: sqlite3.Connection):
