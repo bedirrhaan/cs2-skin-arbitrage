@@ -7,6 +7,7 @@ import json
 import httpx
 
 from . import fx, telegram
+from .catalog import week_sale_stats
 from .db import enabled_sources_for, get_conn, get_settings, top_popular_names
 from .games import GAMES
 from .itemname import cs2_wear_variants, norm, parse_item_name
@@ -371,6 +372,61 @@ def spread_info(prices: dict) -> dict | None:
     }
 
 
+def judge_deal(game: str, name: str, prices: dict, min_pct: float = 8.0) -> dict | None:
+    """Steam + 1 haftalık satış ortalamasına bakıp güncel en ucuzu fırsat sayar."""
+    labels = source_labels(game)
+    live = {
+        s: float(p["price_try"])
+        for s, p in (prices or {}).items()
+        if p and p.get("price_try")
+    }
+    if not live:
+        return None
+    low_src = min(live, key=live.get)
+    low = live[low_src]
+    steam = live.get("steam")
+    hist = week_sale_stats(game, name)
+    reasons = []
+    vs_steam = None
+    vs_hist = None
+    if steam and steam > 0 and low + 0.01 < steam:
+        vs_steam = round((steam - low) / steam * 100, 1)
+        if vs_steam >= min_pct:
+            reasons.append("steam")
+    week_avg = hist.get("week_avg")
+    week_n = int(hist.get("week_n") or 0)
+    if week_avg and week_n >= 3 and low + 0.01 < week_avg:
+        vs_hist = round((week_avg - low) / week_avg * 100, 1)
+        if vs_hist >= min_pct:
+            reasons.append("history")
+    sp = spread_info(prices)
+    if sp and sp["spread_pct"] >= min_pct:
+        reasons.append("spread")
+    if not reasons:
+        return None
+    hi_src = max(live, key=live.get)
+    return {
+        "name": name,
+        "reasons": reasons,
+        "low_source": low_src,
+        "low_label": labels.get(low_src, low_src),
+        "low": round(low, 2),
+        "low_url": (prices.get(low_src) or {}).get("url"),
+        "high_source": hi_src,
+        "high_label": labels.get(hi_src, hi_src),
+        "high": round(live[hi_src], 2),
+        "high_url": (prices.get(hi_src) or {}).get("url"),
+        "spread_pct": sp["spread_pct"] if sp else 0,
+        "diff": round(live[hi_src] - low, 2) if live[hi_src] else 0,
+        "steam": steam,
+        "vs_steam": vs_steam,
+        "week_avg": week_avg,
+        "week_n": week_n,
+        "week_label": hist.get("week_label"),
+        "vs_hist": vs_hist,
+    }
+
+
 def cheapest_three(prices: dict, labels: dict | None = None, n: int = 3) -> list[dict]:
     """En ucuz n pazar; her sırada bir öncekine TL farkı."""
     labels = labels or {}
@@ -455,7 +511,6 @@ async def scan_popular(
     status["popular_game"] = game
     limit = min(max(int(limit or 20), 5), 25)
     min_spread = max(float(min_spread or 0), 0)
-    labels = source_labels(game)
     rows = top_popular_names(game, limit)
     payload = {
         "hits": [],
@@ -476,30 +531,14 @@ async def scan_popular(
                 prices = await _live_prices(client, row["name"], settings, game)
                 payload["progress"] += 1
                 status["popular"][game] = payload
-                sp = spread_info(prices)
-                if not sp or sp["spread_pct"] < min_spread:
+                deal = judge_deal(game, row["name"], prices, min_spread)
+                if not deal:
                     continue
-                steam = (prices.get("steam") or {}).get("price_try")
-                vs_steam = None
-                if steam and sp["low"] < steam:
-                    vs_steam = round((steam - sp["low"]) / steam * 100, 1)
                 hit = {
                     "rank": row["rank"],
-                    "name": row["name"],
                     "in_list": row["in_list"],
                     "in_depo": row["in_depo"],
-                    "low_source": sp["low_source"],
-                    "low_label": labels.get(sp["low_source"], sp["low_source"]),
-                    "low": sp["low"],
-                    "low_url": (prices.get(sp["low_source"]) or {}).get("url"),
-                    "high_source": sp["high_source"],
-                    "high_label": labels.get(sp["high_source"], sp["high_source"]),
-                    "high": sp["high"],
-                    "high_url": (prices.get(sp["high_source"]) or {}).get("url"),
-                    "spread_pct": sp["spread_pct"],
-                    "diff": round(sp["high"] - sp["low"], 2),
-                    "steam": steam,
-                    "vs_steam": vs_steam,
+                    **deal,
                 }
                 hits.append(hit)
                 payload["hits"] = hits
@@ -539,15 +578,24 @@ async def _notify_popular(game: str, hit: dict, settings: dict) -> None:
         except ValueError:
             pass
     where = "listende yok" if not hit.get("in_list") else "listende var"
+    bits = []
+    if hit.get("steam"):
+        bits.append(f"Steam: {tl(hit['steam'])} TL")
+    if hit.get("week_avg") and hit.get("week_n"):
+        bits.append(
+            f"1 hafta ort. ({hit.get('week_label') or 'pazar'}, {hit['week_n']} satış): {tl(hit['week_avg'])} TL"
+        )
+    ref = ("\n" + " · ".join(bits)) if bits else ""
     extra = ""
     if hit.get("vs_steam"):
-        extra = f"\nSteam'e göre %{hit['vs_steam']:.0f} daha ucuz"
+        extra += f"\nSteam'e göre %{hit['vs_steam']:.0f} daha ucuz"
+    if hit.get("vs_hist"):
+        extra += f"\nHaftalık satış ortalamasına göre %{hit['vs_hist']:.0f} daha ucuz"
     msg = (
-        f"🔥 Popüler fırsat (#{hit['rank']}) — {game.upper()}\n"
-        f"<b>{hit['name']}</b>\n"
-        f"En ucuz: {hit['low_label']} — {tl(hit['low'])} TL\n"
-        f"En pahalı: {hit['high_label']} — {tl(hit['high'])} TL\n"
-        f"Makas: <b>%{hit['spread_pct']:.1f}</b> ({tl(hit['diff'])} TL){extra}\n"
+        f"🔥 Fırsat (#{hit.get('rank', '?')}) — {game.upper()}\n"
+        f"<b>{hit['name']}</b>{ref}\n"
+        f"Şu an {hit['low_label']}: <b>{tl(hit['low'])} TL</b>\n"
+        f"Makas: %{hit.get('spread_pct') or 0:.1f}{extra}\n"
         f"{where}"
     )
     await telegram.send_message(

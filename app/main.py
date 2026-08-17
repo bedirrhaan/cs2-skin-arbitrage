@@ -234,6 +234,27 @@ async def scan_opportunities(body: PopularScanIn):
     )
 
 
+@app.get("/api/deals")
+def get_deal(game: str = "cs2", name: str = "", min_spread: float = 0):
+    if game not in GAMES:
+        raise HTTPException(400, "geçersiz oyun")
+    nm = name.strip()
+    if not nm:
+        raise HTTPException(400, "isim gerekli")
+    if min_spread <= 0:
+        try:
+            min_spread = float(get_settings().get("popular_min_spread") or 8)
+        except ValueError:
+            min_spread = 8.0
+    with get_conn() as conn:
+        row = conn.execute(
+            "SELECT id FROM items WHERE game=? AND name=?", (game, nm)
+        ).fetchone()
+    prices = engine.latest_prices(row["id"]) if row else {}
+    deal = engine.judge_deal(game, nm, prices, min_spread)
+    return {"deal": deal, "ok": True}
+
+
 # ---------- döngü ----------
 
 @app.post("/api/items/{item_id}/refresh")

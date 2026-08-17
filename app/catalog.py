@@ -764,6 +764,57 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
         "from_t": series[0]["t"] if series else None,
         "to_t": series[-1]["t"] if series else None,
         "chart_label": label,
+        **week_sale_stats(game, name),
+    }
+
+
+def week_sale_stats(game: str, name: str) -> dict:
+    """Son 7 gün satış/geçmiş: ortalama, adet, kaynak — fırsat referansı."""
+    now = dt.datetime.utcnow()
+    since = (now - dt.timedelta(days=7)).isoformat(timespec="seconds")
+    sources = _spec_for(game, "1w")["sources"]
+    best_src = None
+    best_rows = []
+    for src in sources:
+        part = _history_rows(game, name, (src,), since)
+        if len(part) > len(best_rows):
+            best_src = src
+            best_rows = part
+    if len(best_rows) < 3:
+        with get_conn() as conn:
+            best_rows = conn.execute(
+                """SELECT captured_at, price_try, source FROM price_history
+                   WHERE game=? AND name=? AND price_try IS NOT NULL AND captured_at>=?
+                   ORDER BY captured_at""",
+                (game, name, since),
+            ).fetchall()
+        if best_rows:
+            best_src = best_rows[-1]["source"] if "source" in best_rows[-1].keys() else best_src
+    vals = []
+    for r in best_rows:
+        try:
+            v = float(r["price_try"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if v > 0:
+            vals.append(v)
+    if not vals:
+        return {
+            "week_avg": None,
+            "week_n": 0,
+            "week_low": None,
+            "week_source": None,
+            "week_label": None,
+        }
+    label = CHART_LABELS.get(best_src or "", None)
+    if not label:
+        label = "ByNoGame fiyat" if game == "ko" else ("rust.tm fiyat" if game == "rust" else "Steam fiyat")
+    return {
+        "week_avg": round(sum(vals) / len(vals), 2),
+        "week_n": len(vals),
+        "week_low": round(min(vals), 2),
+        "week_source": best_src,
+        "week_label": label,
     }
 
 

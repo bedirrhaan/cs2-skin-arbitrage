@@ -287,6 +287,8 @@ async function openChart(name, from) {
   hideViews();
   document.getElementById("viewChart").style.display = "";
   document.getElementById("chartName").textContent = name;
+  const dealBox = document.getElementById("chartDeal");
+  if (dealBox) { dealBox.style.display = "none"; dealBox.innerHTML = ""; }
   document.querySelectorAll(".span-btn[data-span]").forEach((b) => b.classList.toggle("on", b.dataset.span === "1h"));
   await renderChart();
   loadChartMarkets(name);
@@ -520,7 +522,34 @@ function priceGridHtml(it, scanning) {
   return `<div class="price-row" style="--n:${enabled.length}">${cells}</div>`;
 }
 
-let chartMarketGen = 0;
+async function paintChartDeal(name) {
+  const el = document.getElementById("chartDeal");
+  if (!el || !name) return;
+  try {
+    const d = await api(`/api/deals?game=${currentGame}&name=${encodeURIComponent(name)}`);
+    const x = d.deal;
+    if (!x) {
+      el.className = "chart-deal none";
+      el.style.display = "";
+      el.innerHTML = "Referans (Steam + 1 haftalık satış) ile siteler karşılaştırıldı — şu an eşiği aşan fırsat yok.";
+      return;
+    }
+    el.className = "chart-deal";
+    el.style.display = "";
+    const refs = [];
+    if (x.steam != null) refs.push(`Steam <b>${fmtTL(x.steam)}</b>`);
+    if (x.week_avg != null)
+      refs.push(`1 hafta ort. ${esc(x.week_label || "")} <b>${fmtTL(x.week_avg)}</b> (${x.week_n} satış)`);
+    const why = [];
+    if (x.vs_steam) why.push(`Steam’e göre %${x.vs_steam}`);
+    if (x.vs_hist) why.push(`haftalık satışa göre %${x.vs_hist}`);
+    el.innerHTML = `Fırsat: şu an <b>${esc(x.low_label)}</b> ${fmtTL(x.low)}`
+      + (refs.length ? `<br>Referans: ${refs.join(" · ")}` : "")
+      + (why.length ? ` — ${why.join(", ")} daha ucuz.` : ".");
+  } catch {
+    el.style.display = "none";
+  }
+}
 async function loadChartMarkets(name) {
   const box = document.getElementById("chartMarkets");
   if (!box) return;
@@ -547,6 +576,7 @@ async function loadChartMarkets(name) {
     }
     if (gen !== chartMarketGen) return;
     box.innerHTML = priceGridHtml(it, false);
+    await paintChartDeal(name);
   } catch (e) {
     if (gen !== chartMarketGen) return;
     box.innerHTML = `<p class="hint">${esc(e.message)}</p>`;
@@ -801,7 +831,7 @@ function renderSpreads(rows) {
   if (!box) return;
   if (!rows.length) {
     box.innerHTML = `<div class="empty small"><p>Henüz fırsat yok. “Tara” ile popüler listedeki ilk itemler taranır.<br>
-      Siteler arası makas eşiği aşınca burada görünür; Telegram açıksa listede olmasa da gelir.</p></div>`;
+      Siteler, Steam ve 1 haftalık satış ortalamasına bakılır; fırsat listende olmasa da Telegram’a gider.</p></div>`;
     return;
   }
   box.innerHTML = rows.map((r) => `
@@ -812,6 +842,12 @@ function renderSpreads(rows) {
         <span class="spread-badge ${r.spread_pct >= 15 ? "hot" : ""}">%${Number(r.spread_pct).toFixed(1)} fark</span>
         ${r.in_list ? "" : `<span class="opp-new">listede yok</span>`}
       </div>
+      ${r.steam || r.week_avg ? `<p class="hint" style="margin:8px 0 0">Referans:
+        ${r.steam != null ? `Steam ${fmtTL(r.steam)}` : ""}
+        ${r.week_avg != null ? ` · 1 hafta ort. ${fmtTL(r.week_avg)} (${r.week_n || 0} satış)` : ""}
+        ${r.vs_steam ? ` · Steam’e göre %${r.vs_steam}` : ""}
+        ${r.vs_hist ? ` · geçmişe göre %${r.vs_hist}` : ""}
+      </p>` : ""}
       <div class="opp-compare">
         <div class="opp-side buy">
           <div class="opp-side-label">💰 En ucuz — ${esc(r.low_label)}</div>
