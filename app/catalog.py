@@ -268,9 +268,12 @@ def _spec_for(game: str, span: str) -> dict:
     if game == "ko":
         spec["sources"] = ("bynogame", "kopazar")
     elif game == "rust":
-        spec["sources"] = tuple(dict.fromkeys(
-            ("steam", "steam_hourly") + spec["sources"]
-        ))
+        spec["sources"] = (
+            "rust_tm",
+            "steam",
+            "steam_hourly",
+            "skinport_daily",
+        )
     return spec
 
 
@@ -593,8 +596,10 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
         return
     spec = _spec_for(game, span)
     key = (game, name, span)
-    if key in _hist_fetched or _coverage_ok(game, name, spec):
+    if _coverage_ok(game, name, spec):
         _hist_fetched.add(key)
+        return
+    if key in _hist_fetched:
         return
 
     if game == "ko":
@@ -614,51 +619,58 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
     from .sources.steam_market import CS2_APP, RUST_APP, fetch_price_history
     try_rate = await fx.to_try(1.0, "USD") or 41.0
     best: list[tuple] = []
-    best_source = "steam_hourly" if interval == "hourly" else "steam"
+    best_source = "steam"
     async with httpx.AsyncClient(follow_redirects=True, timeout=45, headers={"User-Agent": USER_AGENT}) as client:
-        for marketplace in ("steam", "skinport"):
+        if game == "rust":
             try:
-                r = await client.post(
-                    OPENSKIN_HISTORY,
-                    json={
-                        "item": name,
-                        "marketplace": marketplace,
-                        "interval": interval,
-                        "from": start,
-                        "to": end,
-                    },
-                )
-                if r.status_code >= 400:
-                    continue
-                data = r.json().get("data") or []
-                got = []
-                for pt in data:
-                    ts = _parse_hist_ts(pt.get("timestamp") or pt.get("date") or pt.get("t"))
-                    price = pt.get("price")
-                    if price is None:
-                        price = pt.get("median") or pt.get("ask")
-                    if ts is None or price is None:
-                        continue
-                    try:
-                        val = float(price) * try_rate
-                    except (TypeError, ValueError):
-                        continue
-                    if val <= 0:
-                        continue
-                    got.append((ts.replace(microsecond=0).isoformat(), round(val, 2)))
-                if len(got) > len(best):
-                    best = got
-                    if interval == "hourly":
-                        best_source = f"{marketplace}_hourly"
-                    elif marketplace == "skinport":
-                        best_source = "skinport_daily"
-                    else:
-                        best_source = "steam"
-                if marketplace == "steam" and len(got) >= spec["min_buckets"]:
-                    break
+                from .sources.rust_tm import fetch_sales_history
+                rt = await fetch_sales_history(client, name, try_rate)
+                if len(rt) > len(best):
+                    best = rt
+                    best_source = "rust_tm"
             except Exception:
-                continue
-        if len(best) < spec["min_buckets"]:
+                pass
+        if game != "rust" or len(best) < 12:
+            for marketplace in ("steam", "skinport"):
+                try:
+                    r = await client.post(
+                        OPENSKIN_HISTORY,
+                        json={
+                            "item": name,
+                            "marketplace": marketplace,
+                            "interval": interval,
+                            "from": start,
+                            "to": end,
+                        },
+                    )
+                    if r.status_code >= 400:
+                        continue
+                    data = r.json().get("data") or []
+                    got = []
+                    for pt in data:
+                        ts = _parse_hist_ts(pt.get("timestamp") or pt.get("date") or pt.get("t"))
+                        price = pt.get("price")
+                        if price is None:
+                            price = pt.get("median") or pt.get("ask")
+                        if ts is None or price is None:
+                            continue
+                        try:
+                            val = float(price) * try_rate
+                        except (TypeError, ValueError):
+                            continue
+                        if val <= 0:
+                            continue
+                        got.append((ts.replace(microsecond=0).isoformat(), round(val, 2)))
+                    if len(got) > len(best):
+                        best = got
+                        best_source = (
+                            f"{marketplace}_hourly" if interval == "hourly"
+                            else ("skinport_daily" if marketplace == "skinport" else "steam")
+                        )
+                    if marketplace == "steam" and len(got) >= spec["min_buckets"]:
+                        break
+                except Exception:
+                    continue
             try:
                 app_id = RUST_APP if game == "rust" else CS2_APP
                 steam_rows = await fetch_price_history(
@@ -666,7 +678,7 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
                 )
                 if len(steam_rows) > len(best):
                     best = steam_rows
-                    best_source = "steam_hourly" if interval == "hourly" else "steam"
+                    best_source = "steam"
             except Exception:
                 pass
     if len(best) >= 2:
@@ -674,24 +686,37 @@ async def ensure_market_history(game: str, name: str, span: str = "1d") -> None:
     _hist_fetched.add(key)
 
 
+CHART_LABELS = {
+    "rust_tm": "rust.tm fiyat",
+    "bynogame": "ByNoGame fiyat",
+    "kopazar": "Kopazar fiyat",
+    "steam": "Steam fiyat",
+    "steam_hourly": "Steam fiyat",
+    "skinport": "Skinport fiyat",
+    "skinport_daily": "Skinport fiyat",
+    "skinport_hourly": "Skinport fiyat",
+}
+
+
 def history_series(game: str, name: str, span: str = "1d") -> dict:
     """span: 1h saatlik | 1d günlük | 1w haftalık | 1m aylık"""
     spec = _spec_for(game, span)
     now = dt.datetime.now()
-    since = (now - spec["delta"]).isoformat(timespec="seconds")
     bucket = spec["bucket"]
+    used_src = spec["sources"][0] if spec["sources"] else ""
+    since = (now - spec["delta"]).isoformat(timespec="seconds")
     rows = []
     for src in spec["sources"]:
         part = _history_rows(game, name, (src,), since)
-        if len(_series_from_rows(part, bucket)) >= spec["min_buckets"]:
+        scored = _series_from_rows(part, bucket)
+        if len(scored) >= spec["min_buckets"]:
             rows = part
+            used_src = src
             break
         if len(part) > len(rows):
             rows = part
+            used_src = src
     if not rows:
-        rows = _history_rows(game, name, spec["sources"], since)
-    if not rows:
-        placeholders = "?,?"
         with get_conn() as conn:
             rows = conn.execute(
                 """SELECT captured_at, price_try FROM price_history
@@ -700,6 +725,20 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
                 (game, name, since),
             ).fetchall()
     series = _series_from_rows(rows, bucket)
+    if len(series) < 4:
+        old_since = (now - dt.timedelta(days=400)).isoformat(timespec="seconds")
+        with get_conn() as conn:
+            wide = conn.execute(
+                """SELECT captured_at, price_try FROM price_history
+                   WHERE game=? AND name=? AND price_try IS NOT NULL AND captured_at>=?
+                   ORDER BY captured_at""",
+                (game, name, old_since),
+            ).fetchall()
+        for b in (bucket, "day", "week", "month"):
+            cand = _series_from_rows(wide or rows, b)
+            if len(cand) > len(series):
+                series = cand
+                bucket = b
     latest = series[-1]["v"] if series else None
     first = series[0]["v"] if series else None
     low = min((p["v"] for p in series), default=None)
@@ -707,6 +746,12 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
     change_pct = None
     if first and latest and first > 0:
         change_pct = round((latest - first) / first * 100, 1)
+    if game == "ko":
+        label = CHART_LABELS.get(used_src, "ByNoGame fiyat")
+    elif game == "rust":
+        label = CHART_LABELS.get(used_src, "rust.tm fiyat")
+    else:
+        label = CHART_LABELS.get(used_src, "Steam fiyat")
     return {
         "span": span,
         "bucket": bucket,
@@ -718,7 +763,7 @@ def history_series(game: str, name: str, span: str = "1d") -> dict:
         "change_pct": change_pct,
         "from_t": series[0]["t"] if series else None,
         "to_t": series[-1]["t"] if series else None,
-        "chart_label": "Pazar fiyat" if game == "ko" else "Steam fiyat",
+        "chart_label": label,
     }
 
 

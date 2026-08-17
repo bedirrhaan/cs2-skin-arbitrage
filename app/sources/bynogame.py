@@ -122,41 +122,76 @@ async def _search_ko_products(
 async def _ko_listings(
     client: httpx.AsyncClient,
     product_id: int,
+    *,
+    in_stock_only: bool = True,
+    pages: int = 1,
 ) -> list[dict]:
-    url = (
-        f"{KO_LISTINGS_API}?page=1&limit=1000&sort=Price:1"
-        f"&filters=Product:{product_id};OnlyInStock:true"
-    )
-    r = await client.get(url, headers=_HEADERS, timeout=30)
-    r.raise_for_status()
-    body = r.json()
-    if not body.get("success"):
-        return []
-    return body.get("data", {}).get("result") or []
+    out: list[dict] = []
+    filt = f"Product:{product_id}"
+    if in_stock_only:
+        filt += ";OnlyInStock:true"
+    for page in range(1, max(1, pages) + 1):
+        url = (
+            f"{KO_LISTINGS_API}?page={page}&limit=100&sort=CreatedAt:-1"
+            f"&filters={filt}"
+        )
+        r = await client.get(url, headers=_HEADERS, timeout=30)
+        r.raise_for_status()
+        body = r.json()
+        if not body.get("success"):
+            break
+        batch = body.get("data", {}).get("result") or []
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < 100:
+            break
+    return out
 
 
 async def _ko_min_listing_price(
     client: httpx.AsyncClient,
     product_id: int,
 ) -> float | None:
-    listings = await _ko_listings(client, product_id)
+    listings = await _ko_listings(client, product_id, in_stock_only=True, pages=1)
     prices = [float(it["price"]) for it in listings if it.get("price")]
     return min(prices) if prices else None
 
 
-def _ko_listing_ts(it: dict):
+def _parse_bng_dt(raw):
     import datetime as dt
-    raw = (
-        it.get("createdAt") or it.get("created_at") or it.get("updatedAt")
-        or it.get("updated_at") or it.get("date")
-    )
-    if not raw:
-        return dt.datetime.utcnow().replace(microsecond=0)
-    s = str(raw).replace("Z", "").split(".")[0]
+    import re
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s or s.startswith("0001"):
+        return None
+    s = s.replace("Z", "+00:00")
+    m = re.match(r"(.*T\d{2}:\d{2}:\d{2})(\.\d+)?(.*)$", s)
+    if m:
+        frac = (m.group(2) or "")[:7]
+        s = m.group(1) + frac + (m.group(3) or "")
     try:
-        return dt.datetime.fromisoformat(s)
+        t = dt.datetime.fromisoformat(s)
     except ValueError:
-        return dt.datetime.utcnow().replace(microsecond=0)
+        try:
+            t = dt.datetime.fromisoformat(s.split("+")[0].split("Z")[0][:19])
+        except ValueError:
+            return None
+    if t.tzinfo is not None:
+        t = t.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return t.replace(microsecond=0)
+
+
+def _ko_listing_ts(it: dict):
+    sold = _parse_bng_dt(it.get("dateSold"))
+    if sold and sold.year >= 2020:
+        return sold
+    for key in ("createdAt", "dateActive", "dateUpdated", "updatedAt"):
+        t = _parse_bng_dt(it.get(key))
+        if t:
+            return t
+    return None
 
 
 async def ko_price_points(
@@ -180,7 +215,9 @@ async def ko_price_points(
             if pid is None or int(pid) in seen_ids:
                 continue
             seen_ids.add(int(pid))
-            listings = await _ko_listings(client, int(pid))
+            listings = await _ko_listings(
+                client, int(pid), in_stock_only=False, pages=6
+            )
             priced = []
             for it in listings:
                 try:
@@ -189,8 +226,10 @@ async def ko_price_points(
                     continue
                 if p <= 0:
                     continue
-                ts = _ko_listing_ts(it).replace(microsecond=0).isoformat()
-                priced.append((ts, round(p, 2)))
+                ts = _ko_listing_ts(it)
+                if ts is None:
+                    continue
+                priced.append((ts.isoformat(), round(p, 2)))
             if priced:
                 points.extend(priced)
                 continue
