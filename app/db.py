@@ -94,7 +94,7 @@ DEFAULT_SETTINGS = {
     "enabled_sources": "steam,skinport,dmarket,bitskins,kopazar,gamesatis,bynogame,csfloat,itemsatis,itemci",
     "enabled_sources_cs2": "steam,skinport,dmarket,bitskins,kopazar,gamesatis,bynogame,csfloat,itemsatis,itemci",
     "enabled_sources_rust": "skinport,dmarket,rust_tm,bynogame,waxpeer,steam,gamesatis",
-    "enabled_sources_ko": "kopazar,bynogame",
+    "enabled_sources_ko": "kopazar,bynogame,klasgame,oyunfor",
     "popular_top_n": "20",
     "popular_min_spread": "8",
 }
@@ -212,7 +212,28 @@ def _append_missing_sources(conn: sqlite3.Connection):
         ]
         conn.execute(
             "UPDATE settings SET value=? WHERE key='enabled_sources_ko'",
-            (",".join(parts) or "kopazar,bynogame",),
+            (",".join(parts) or "kopazar,bynogame,klasgame,oyunfor",),
+        )
+
+    flag_ko = "migrated_ko_markets_v2"
+    if not conn.execute("SELECT 1 FROM settings WHERE key=?", (flag_ko,)).fetchone():
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key='enabled_sources_ko'"
+        ).fetchone()
+        parts = [s.strip() for s in (row["value"] if row else "").split(",") if s.strip()]
+        parts = [s for s in parts if s != "itemsatis"]
+        for src in ("klasgame", "oyunfor"):
+            if src not in parts:
+                parts.append(src)
+        if not parts:
+            parts = ["kopazar", "bynogame", "klasgame", "oyunfor"]
+        conn.execute(
+            "INSERT INTO settings(key,value) VALUES('enabled_sources_ko',?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (",".join(parts),),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)", (flag_ko, "1")
         )
 
 

@@ -372,8 +372,40 @@ def spread_info(prices: dict) -> dict | None:
     }
 
 
+def _median(vals: list[float]) -> float | None:
+    nums = sorted(v for v in vals if v and v > 0)
+    if not nums:
+        return None
+    n = len(nums)
+    if n % 2:
+        return nums[n // 2]
+    return (nums[n // 2 - 1] + nums[n // 2]) / 2
+
+
+def _market_rows(prices: dict, labels: dict, low_src: str) -> list[dict]:
+    rows = []
+    for src, p in (prices or {}).items():
+        if not p or p.get("price_try") is None:
+            continue
+        try:
+            price = float(p["price_try"])
+        except (TypeError, ValueError):
+            continue
+        if price <= 0:
+            continue
+        rows.append({
+            "source": src,
+            "label": labels.get(src, src),
+            "price": round(price, 2),
+            "url": p.get("url"),
+            "is_low": src == low_src,
+        })
+    rows.sort(key=lambda x: x["price"])
+    return rows
+
+
 def judge_deal(game: str, name: str, prices: dict, min_pct: float = 8.0) -> dict | None:
-    """Steam + 1 haftalık satış ortalamasına bakıp güncel en ucuzu fırsat sayar."""
+    """Referans pazar + 1 haftalık satış ortalamasına bakıp güncel en ucuzu fırsat sayar."""
     labels = source_labels(game)
     live = {
         s: float(p["price_try"])
@@ -385,12 +417,15 @@ def judge_deal(game: str, name: str, prices: dict, min_pct: float = 8.0) -> dict
     low_src = min(live, key=live.get)
     low = live[low_src]
     steam = live.get("steam")
+    ref_src = "steam" if game != "ko" else "bynogame"
+    ref_price = live.get(ref_src)
+    ref_label = labels.get(ref_src, "ByNoGame" if game == "ko" else "Steam")
     hist = week_sale_stats(game, name)
     reasons = []
     vs_steam = None
     vs_hist = None
-    if steam and steam > 0 and low + 0.01 < steam:
-        vs_steam = round((steam - low) / steam * 100, 1)
+    if ref_price and ref_price > 0 and low + 0.01 < ref_price:
+        vs_steam = round((ref_price - low) / ref_price * 100, 1)
         if vs_steam >= min_pct:
             reasons.append("steam")
     week_avg = hist.get("week_avg")
@@ -405,6 +440,16 @@ def judge_deal(game: str, name: str, prices: dict, min_pct: float = 8.0) -> dict
     if not reasons:
         return None
     hi_src = max(live, key=live.get)
+    others = [v for s, v in live.items() if s != low_src]
+    market_band = _median(others) or _median(list(live.values()))
+    was_price = None
+    if week_avg and week_avg > low:
+        was_price = float(week_avg)
+    elif market_band and market_band > low:
+        was_price = float(market_band)
+    discount_pct = 0.0
+    if was_price and was_price > 0:
+        discount_pct = (was_price - low) / was_price * 100
     return {
         "name": name,
         "reasons": reasons,
@@ -418,12 +463,19 @@ def judge_deal(game: str, name: str, prices: dict, min_pct: float = 8.0) -> dict
         "high_url": (prices.get(hi_src) or {}).get("url"),
         "spread_pct": sp["spread_pct"] if sp else 0,
         "diff": round(live[hi_src] - low, 2) if live[hi_src] else 0,
-        "steam": steam,
-        "vs_steam": vs_steam,
+        "steam": steam if game != "ko" else None,
+        "vs_steam": vs_steam if game != "ko" else None,
+        "ref_price": ref_price,
+        "ref_label": ref_label,
+        "vs_ref": vs_steam,
         "week_avg": week_avg,
         "week_n": week_n,
         "week_label": hist.get("week_label"),
         "vs_hist": vs_hist,
+        "was_price": round(was_price, 2) if was_price else None,
+        "market_band": round(market_band, 2) if market_band else None,
+        "discount_pct": round(discount_pct, 1),
+        "markets": _market_rows(prices, labels, low_src),
     }
 
 
@@ -529,6 +581,12 @@ async def scan_popular(
     status["popular_game"] = game
     limit = min(max(int(limit or 20), 5), 25)
     min_spread = max(float(min_spread or 0), 0)
+    if game == "ko":
+        try:
+            from .catalog import seed_ko_catalog
+            await seed_ko_catalog(limit)
+        except Exception as e:
+            status["errors"]["ko_catalog"] = f"{type(e).__name__}: {e}"[:200]
     rows = top_popular_names(game, limit)
     payload = {
         "hits": [],
@@ -559,12 +617,14 @@ async def scan_popular(
                     **deal,
                 }
                 hits.append(hit)
+                hits.sort(key=lambda h: float(h.get("discount_pct") or h.get("spread_pct") or 0), reverse=True)
                 payload["hits"] = hits
                 status["popular"][game] = payload
                 if notify:
                     await _notify_popular(game, hit, settings)
                 await asyncio.sleep(0.35)
         payload["at"] = dt.datetime.now().isoformat(timespec="seconds")
+        hits.sort(key=lambda h: float(h.get("discount_pct") or h.get("spread_pct") or 0), reverse=True)
         payload["hits"] = hits
         status["popular"][game] = payload
         return popular_status(game)
@@ -599,21 +659,28 @@ async def _notify_popular(game: str, hit: dict, settings: dict) -> None:
     bits = []
     if hit.get("steam"):
         bits.append(f"Steam: {tl(hit['steam'])} TL")
+    elif hit.get("ref_price") and hit.get("ref_label"):
+        bits.append(f"{hit['ref_label']}: {tl(hit['ref_price'])} TL")
     if hit.get("week_avg") and hit.get("week_n"):
         bits.append(
             f"1 hafta ort. ({hit.get('week_label') or 'pazar'}, {hit['week_n']} satış): {tl(hit['week_avg'])} TL"
         )
     ref = ("\n" + " · ".join(bits)) if bits else ""
-    extra = ""
-    if hit.get("vs_steam"):
-        extra += f"\nSteam'e göre %{hit['vs_steam']:.0f} daha ucuz"
-    if hit.get("vs_hist"):
-        extra += f"\nHaftalık satış ortalamasına göre %{hit['vs_hist']:.0f} daha ucuz"
+    others_txt = ""
+    markets = [m for m in (hit.get("markets") or []) if not m.get("is_low")]
+    if markets:
+        others_txt = "\nDiğer siteler: " + " · ".join(
+            f"{m['label']} {tl(m['price'])} TL" for m in markets[:6]
+        )
+    was = hit.get("was_price")
+    disc = hit.get("discount_pct") or 0
+    drop = ""
+    if was and disc:
+        drop = f"\nNormalde {tl(was)} TL → şu an {tl(hit['low'])} TL (−%{disc:.0f})"
     msg = (
-        f"🔥 Fırsat (#{hit.get('rank', '?')}) — {game.upper()}\n"
+        f"🔥 Popüler indirim (#{hit.get('rank', '?')}) — {game.upper()}\n"
         f"<b>{hit['name']}</b>{ref}\n"
-        f"Şu an {hit['low_label']}: <b>{tl(hit['low'])} TL</b>\n"
-        f"Makas: %{hit.get('spread_pct') or 0:.1f}{extra}\n"
+        f"{hit['low_label']}: <b>{tl(hit['low'])} TL</b>{drop}{others_txt}\n"
         f"{where}"
     )
     await telegram.send_message(

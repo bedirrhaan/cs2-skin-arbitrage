@@ -26,7 +26,7 @@ const GAME_UI = {
   },
   ko: {
     title: "Knight Online itemlerini izle.",
-    desc: "KO itemlerini Kopazar ve ByNoGame üzerinde karşılaştır. + basamağı ve Reverse eşleşmesi desteklenir.",
+    desc: "KO itemlerini Kopazar, ByNoGame, Klasgame ve Oyunfor üzerinde karşılaştır. ByNoGame referans pazardır; diğer sitede daha ucuzsa fırsat çıkar. + basamağı ve Reverse eşleşmesi desteklenir.",
     placeholder: "örn. Raptor +11 (Reverse) veya Shard +9",
     hint: "+ basamağını yaz. Reverse item için <code>Raptor +11 (Reverse)</code> seç — pazarda çoğu +11 Raptor Reverse satılır.",
     empty: "Henüz KO araması yok. Yukarıdan bir item ara,<br>fiyatları gör.",
@@ -98,7 +98,7 @@ const HUB_COPY = {
   ara: { title: "Item Ara", lead: "Oyunu seç. CS2, Rust veya Knight Online aramasına geçersin." },
   listele: { title: "Item Listele", lead: "Oyunu seç. Tüm isimler listelenir; birine basınca fiyat grafiği açılır." },
   depo: { title: "Takip", lead: "Oyunu seç. Beğenip takibe aldığın itemler burada." },
-  opps: { title: "Fırsatlar", lead: "Oyunu seç. Popüler / çok satan ilk 5–25 item taranır; fırsat varsa listende olmasa da bildirilir." },
+  opps: { title: "Popülerlik", lead: "Oyunu seç. Çok satan ilk 5–25 taranır; bir sitede büyük indirim varsa diğer sitelerin fiyatı da yazılır." },
 };
 
 function toggleSidebar() {
@@ -466,7 +466,7 @@ const DEFAULT_SOURCES = {
     skinport: "Skinport", dmarket: "DMarket", rust_tm: "rust.tm", bynogame: "ByNoGame",
     waxpeer: "Waxpeer", steam: "Steam Market", bitskins: "Bitskins", gamesatis: "GameSatis",
   },
-  ko: { kopazar: "Kopazar", bynogame: "ByNoGame" },
+  ko: { kopazar: "Kopazar", bynogame: "ByNoGame", klasgame: "Klasgame", oyunfor: "Oyunfor" },
 };
 
 function ensureSources() {
@@ -556,17 +556,22 @@ function paintDealBox(x) {
   if (!x) {
     el.className = "chart-deal none";
     el.style.display = "";
-    el.innerHTML = "Referans (Steam + 1 haftalık satış) ile siteler karşılaştırıldı — şu an eşiği aşan fırsat yok.";
+    el.innerHTML = currentGame === "ko"
+      ? "Referans (ByNoGame + siteler arası makas) ile karşılaştırıldı — şu an eşiği aşan fırsat yok."
+      : "Referans (Steam + 1 haftalık satış) ile siteler karşılaştırıldı — şu an eşiği aşan fırsat yok.";
     return;
   }
   el.className = "chart-deal";
   el.style.display = "";
   const refs = [];
-  if (x.steam != null) refs.push(`Steam <b>${fmtTL(x.steam)}</b>`);
+  const refPrice = x.steam != null ? x.steam : x.ref_price;
+  const refLabel = x.steam != null ? "Steam" : (x.ref_label || "referans");
+  if (refPrice != null) refs.push(`${esc(refLabel)} <b>${fmtTL(refPrice)}</b>`);
   if (x.week_avg != null)
     refs.push(`1 hafta ort. ${esc(x.week_label || "")} <b>${fmtTL(x.week_avg)}</b> (${x.week_n} satış)`);
   const why = [];
-  if (x.vs_steam) why.push(`Steam’e göre %${x.vs_steam}`);
+  const vsRef = x.vs_steam || x.vs_ref;
+  if (vsRef) why.push(`${esc(refLabel)}’e göre %${vsRef}`);
   if (x.vs_hist) why.push(`haftalık satışa göre %${x.vs_hist}`);
   el.innerHTML = `Fırsat: şu an <b>${esc(x.low_label)}</b> ${fmtTL(x.low)}`
     + (refs.length ? `<br>Referans: ${refs.join(" · ")}` : "")
@@ -842,8 +847,8 @@ function paintOpportunities(d) {
   const n = d.total || d.limit || oppSelectedN();
   if (meta) {
     if (d.running) meta.textContent = `Popüler ilk ${n} taranıyor… ${d.progress || 0}/${n}`;
-    else if (d.at) meta.textContent = `Son tarama: ${d.at} · ilk ${d.limit || n} · ${d.hits ? d.hits.length : 0} fırsat`;
-    else meta.textContent = `Hazır. Popüler ilk ${n} itemi tara — listende olmayanlar da bildirilir.`;
+    else if (d.at) meta.textContent = `Son tarama: ${d.at} · ilk ${d.limit || n} · ${d.hits ? d.hits.length : 0} indirim`;
+    else meta.textContent = `Hazır. Popüler ilk ${n} itemi tara — büyük indirim listende olmasa da görünür.`;
   }
   renderSpreads(d.hits || []);
 }
@@ -852,39 +857,46 @@ function renderSpreads(rows) {
   const box = document.getElementById("oppSpreads");
   if (!box) return;
   if (!rows.length) {
-    box.innerHTML = `<div class="empty small"><p>Henüz fırsat yok. “Tara” ile popüler listedeki ilk itemler taranır.<br>
-      Siteler, Steam ve 1 haftalık satış ortalamasına bakılır; fırsat listende olmasa da Telegram’a gider.</p></div>`;
+    box.innerHTML = `<div class="empty small"><p>Henüz büyük indirim yok. “Tara” ile popüler listedeki ilk itemler taranır.<br>
+      Bir sitede fiyat çökerse (ör. ByNoGame 50 TL, Kopazar 160, GameSatis 150) buraya düşer; listende olmasa da Telegram’a gider.</p></div>`;
     return;
   }
-  box.innerHTML = rows.map((r) => `
-    <div class="opp-card" data-name="${esc(r.name)}" onclick="openChart(this.dataset.name,'opps')">
+  box.innerHTML = rows.map((r) => {
+    const disc = Number(r.discount_pct || r.spread_pct || 0);
+    const others = (r.markets || []).filter((m) => !m.is_low);
+    const marketsHtml = others.length
+      ? `<div class="opp-markets">
+          <div class="opp-markets-label">Diğer siteler şu an</div>
+          ${others.map((m) => `
+            <div class="opp-mrow">
+              <span class="opp-msrc">${esc(m.label)}</span>
+              ${m.url
+                ? `<a class="opp-mprice" href="${esc(m.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${fmtTL(m.price)}</a>`
+                : `<span class="opp-mprice">${fmtTL(m.price)}</span>`}
+            </div>`).join("")}
+        </div>`
+      : "";
+    const was = r.was_price != null ? r.was_price : r.market_band;
+    return `
+    <div class="opp-card discount" data-name="${esc(r.name)}" onclick="openChart(this.dataset.name,'opps')">
       <div class="opp-head">
         <span class="opp-rank">#${r.rank}</span>
         <span class="opp-name">${esc(r.name)}</span>
-        <span class="spread-badge ${r.spread_pct >= 15 ? "hot" : ""}">%${Number(r.spread_pct).toFixed(1)} fark</span>
-        ${r.in_list ? "" : `<span class="opp-new">listede yok</span>`}
+        <span class="spread-badge ${disc >= 25 ? "hot" : ""}">−%${disc.toFixed(0)} indirim</span>
+        ${r.in_list ? "" : `<span class="opp-tag">listede yok</span>`}
       </div>
-      ${r.steam || r.week_avg ? `<p class="hint" style="margin:8px 0 0">Referans:
-        ${r.steam != null ? `Steam ${fmtTL(r.steam)}` : ""}
-        ${r.week_avg != null ? ` · 1 hafta ort. ${fmtTL(r.week_avg)} (${r.week_n || 0} satış)` : ""}
-        ${r.vs_steam ? ` · Steam’e göre %${r.vs_steam}` : ""}
-        ${r.vs_hist ? ` · geçmişe göre %${r.vs_hist}` : ""}
-      </p>` : ""}
-      <div class="opp-compare">
-        <div class="opp-side buy">
-          <div class="opp-side-label">💰 En ucuz — ${esc(r.low_label)}</div>
-          <div class="opp-side-price">${fmtTL(r.low)}</div>
-          ${r.low_url ? `<a href="${esc(r.low_url)}" target="_blank" rel="noopener" class="opp-link" onclick="event.stopPropagation()">ilana git →</a>` : ""}
+      <div class="opp-deal-site">
+        <div class="opp-side-label">💥 ${esc(r.low_label)}</div>
+        <div class="opp-discount-row">
+          ${was != null ? `<span class="opp-old">${fmtTL(was)}</span>` : ""}
+          <span class="opp-now">${fmtTL(r.low)}</span>
+          ${was != null ? `<span class="opp-qty">normalde ${fmtTL(was)} · şu an ${fmtTL(r.low)}</span>` : ""}
         </div>
-        <div class="opp-arrow">➜</div>
-        <div class="opp-side sell">
-          <div class="opp-side-label">🏷️ En pahalı — ${esc(r.high_label)}</div>
-          <div class="opp-side-price">${fmtTL(r.high)}</div>
-          ${r.high_url ? `<a href="${esc(r.high_url)}" target="_blank" rel="noopener" class="opp-link" onclick="event.stopPropagation()">ilana git →</a>` : ""}
-        </div>
-        <div class="opp-profit">aradaki fark<br><b>${fmtTL(r.diff)}</b></div>
+        ${r.low_url ? `<a href="${esc(r.low_url)}" target="_blank" rel="noopener" class="opp-link" onclick="event.stopPropagation()">ilana git →</a>` : ""}
       </div>
-    </div>`).join("");
+      ${marketsHtml}
+    </div>`;
+  }).join("");
 }
 
 /* ---------- geçmiş aramalar ---------- */

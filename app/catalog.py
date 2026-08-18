@@ -266,7 +266,7 @@ SPAN_WINDOWS = {
 def _spec_for(game: str, span: str) -> dict:
     spec = dict(SPAN_WINDOWS.get(span, SPAN_WINDOWS["1d"]))
     if game == "ko":
-        spec["sources"] = ("bynogame", "kopazar")
+        spec["sources"] = ("bynogame", "kopazar", "klasgame", "oyunfor")
     elif game == "rust":
         spec["sources"] = (
             "rust_tm",
@@ -492,7 +492,45 @@ async def _list_ko(q: str = "", offset: int = 0, limit: int = 80) -> dict:
     if q:
         ql = q.lower()
         items = [x for x in items if ql in x["name"].lower()]
+    try:
+        await asyncio.to_thread(
+            upsert_catalog,
+            "ko",
+            [
+                (it["name"], it.get("price_try"), it.get("quantity") or 1, it.get("url"), "bynogame")
+                for it in items
+            ],
+        )
+    except Exception:
+        pass
     return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+async def seed_ko_catalog(limit: int = 25) -> int:
+    """Popüler taramadan önce ByNoGame + Kopazar KO itemlerini kataloga yazar."""
+    from .ko_item import canonical_ko_title
+    from .sources.base import USER_AGENT
+    from .sources.kopazar import list_ko_cheap
+
+    n = min(max(int(limit or 25), 5), 80)
+    data = await _list_ko(q="", offset=0, limit=n)
+    extra = []
+    try:
+        async with httpx.AsyncClient(
+            follow_redirects=True, timeout=40, headers={"User-Agent": USER_AGENT}
+        ) as client:
+            for row in await list_ko_cheap(client, n):
+                title = canonical_ko_title(row.get("title") or "")
+                if not title:
+                    continue
+                extra.append(
+                    (title, row.get("price"), 1, row.get("url"), "kopazar")
+                )
+        if extra:
+            await asyncio.to_thread(upsert_catalog, "ko", extra)
+    except Exception:
+        extra = []
+    return len(data.get("items") or []) + len(extra)
 
 
 OPENSKIN_HISTORY = "https://api.openskin.dev/v1/history"
@@ -690,6 +728,8 @@ CHART_LABELS = {
     "rust_tm": "rust.tm fiyat",
     "bynogame": "ByNoGame fiyat",
     "kopazar": "Kopazar fiyat",
+    "klasgame": "Klasgame fiyat",
+    "oyunfor": "Oyunfor fiyat",
     "steam": "Steam fiyat",
     "steam_hourly": "Steam fiyat",
     "skinport": "Skinport fiyat",

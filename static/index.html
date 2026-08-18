@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Skin Arbitraj Paneli</title>
-<link rel="stylesheet" href="/static/style.css?v=23">
+<link rel="stylesheet" href="/static/style.css?v=25">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>">
 </head>
 <body class="shell">
@@ -27,7 +27,7 @@
       <span class="sic">⌕</span> Item Ara
     </button>
     <button class="sitem" id="navOpps" onclick="goSection('opps')">
-      <span class="sic">◆</span> Fırsatlar
+      <span class="sic">◆</span> Popülerlik
     </button>
     <button class="sitem" id="navListele" onclick="goSection('listele')">
       <span class="sic">☰</span> Item Listele
@@ -146,8 +146,8 @@
   <div id="viewOpps" style="display:none">
     <button class="as-back-btn" onclick="goSection('opps')">← Oyunlar</button>
     <div class="hero">
-      <h1>Popüler fırsatlar.</h1>
-      <p>Sitelerdeki popüler / çok satan sıradan ilk 5–25 item otomatik taranır. Fırsat varsa item listende olmasa da Telegram’a düşer.</p>
+      <h1>Popülerlik.</h1>
+      <p>Sitelerdeki popüler / çok satan ilk 5–25 item taranır. Bir sitede hayvan gibi indirim varsa — örneğin ByNoGame 50 TL, diğerleri 150 TL bandı — listende olmasa da buraya ve Telegram’a düşer.</p>
     </div>
     <div class="add-card">
       <h2 class="brush">Tarama derinliği</h2>
@@ -169,7 +169,7 @@
       </div>
       <p class="hint" id="oppScanMeta"></p>
     </div>
-    <h2 class="brush opps-title">Fırsat bulunanlar</h2>
+    <h2 class="brush opps-title">İndirimli popülerler</h2>
     <div id="oppSpreads" class="opps-list"></div>
   </div>
 </main>
@@ -228,6 +228,6 @@
 
 <div id="toast"></div>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js" defer></script>
-<script src="/static/app.js?v=23" defer></script>
+<script src="/static/app.js?v=25" defer></script>
 </body>
 </html>

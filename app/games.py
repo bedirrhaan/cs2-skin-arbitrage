@@ -13,6 +13,8 @@ from .sources import (
     rust_tm,
     waxpeer,
     steam_market,
+    klasgame,
+    oyunfor,
 )
 from .sources import SOURCES as CS2_SOURCES
 
@@ -69,6 +71,18 @@ KO_SOURCES = {
         "module": bynogame,
         "currency": "TRY",
         "fetch": bynogame.fetch_ko,
+    },
+    "klasgame": {
+        "label": "Klasgame",
+        "module": klasgame,
+        "currency": "TRY",
+        "fetch": klasgame.fetch_ko,
+    },
+    "oyunfor": {
+        "label": "Oyunfor",
+        "module": oyunfor,
+        "currency": "TRY",
+        "fetch": oyunfor.fetch_ko,
     },
 }
 

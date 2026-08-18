@@ -747,12 +747,19 @@ h1, h2, h3, .brush { font-family: "Snell Roundhand", "Brush Script MT", cursive;
   cursor: pointer;
 }
 .opp-rank { font-weight: 800; color: var(--ink-soft); min-width: 28px; }
-.opp-new {
+.opp-tag {
   font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 999px;
   background: rgba(162, 209, 45, 0.22); color: #3d5c08;
 }
 .opp-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.opp-name { font-size: 15.5px; font-weight: 700; }
+.opp-name { font-size: 15.5px; font-weight: 700; flex: 1; }
+.opp-deal-site {
+  margin-top: 12px;
+  background: rgba(143, 199, 192, 0.18);
+  border: 1px solid var(--teal-deep);
+  border-radius: 14px;
+  padding: 12px 14px;
+}
 .opp-compare {
   display: flex; align-items: center; gap: 16px;
   margin-top: 12px; flex-wrap: wrap;
@@ -777,11 +784,36 @@ h1, h2, h3, .brush { font-family: "Snell Roundhand", "Brush Script MT", cursive;
 .opp-link:hover { text-decoration: underline; }
 
 .opp-card.discount .opp-discount-row {
-  display: flex; align-items: baseline; gap: 14px; margin-top: 8px; flex-wrap: wrap;
+  display: flex; align-items: baseline; gap: 12px; margin-top: 6px; flex-wrap: wrap;
 }
-.opp-old { text-decoration: line-through; color: var(--ink-soft); font-size: 14px; }
-.opp-new { font-size: 19px; font-weight: 800; color: var(--teal-deep); }
-.opp-qty { font-size: 12px; color: var(--ink-soft); }
+.opp-old { text-decoration: line-through; color: var(--ink-soft); font-size: 15px; font-weight: 600; }
+.opp-now { font-size: 22px; font-weight: 800; color: var(--teal-deep); }
+.opp-qty { font-size: 12.5px; color: var(--ink-soft); }
+.opp-markets {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+}
+.opp-markets-label {
+  grid-column: 1 / -1;
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 2px;
+}
+.opp-mrow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13.5px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(95, 107, 179, 0.18);
+}
+.opp-msrc { color: var(--ink-soft); font-weight: 600; }
+.opp-mprice { color: var(--ink); font-weight: 800; text-decoration: none; }
 
 .empty.small { padding: 24px 16px; font-size: 13.5px; }
 

@@ -99,6 +99,41 @@ async def search_ko_listings(
     return rows
 
 
+async def list_ko_cheap(client: httpx.AsyncClient, limit: int = 24) -> list[dict]:
+    """Kopazar KO item listesi — ucuzdan pahalıya, popüler tarama tohumu."""
+    await _ensure_cookies(client)
+    url = f"{BASE}/knight-online-item?sort=cheap&limit={min(max(int(limit or 24), 8), 48)}"
+    r = await client.get(
+        url,
+        headers={"User-Agent": USER_AGENT, "Referer": BASE + "/knight-online-item"},
+        cookies=_cookies,
+        timeout=40,
+    )
+    r.raise_for_status()
+    soup = BeautifulSoup(r.text, "html.parser")
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for card in soup.select("a.card.item"):
+        title_el = card.select_one(".item-title strong")
+        if not title_el:
+            continue
+        title = title_el.get_text(" ", strip=True)
+        href = card.get("href", "")
+        if href and not href.startswith("http"):
+            href = BASE + href
+        if title in seen:
+            continue
+        seen.add(title)
+        rows.append({
+            "title": title,
+            "price": _parse_ko_card_price(card),
+            "url": href or url,
+        })
+        if len(rows) >= limit:
+            break
+    return rows
+
+
 async def fetch_ko(client: httpx.AsyncClient, parsed: ParsedKoItem) -> PriceResult:
     res = PriceResult(source="kopazar", currency="TRY")
     try:
